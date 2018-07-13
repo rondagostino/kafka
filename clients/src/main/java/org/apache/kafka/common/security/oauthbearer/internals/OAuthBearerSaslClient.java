@@ -32,6 +32,7 @@ import javax.security.sasl.SaslException;
 import org.apache.kafka.common.errors.IllegalSaslStateException;
 import org.apache.kafka.common.security.auth.SaslExtensions;
 import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
+import org.apache.kafka.common.security.expiring.ExpiringCredential;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerToken;
@@ -55,6 +56,8 @@ public class OAuthBearerSaslClient implements SaslClient {
     static final byte BYTE_CONTROL_A = (byte) 0x01;
     private static final Logger log = LoggerFactory.getLogger(OAuthBearerSaslClient.class);
     private final CallbackHandler callbackHandler;
+    private final OAuthBearerTokenCallback callback = new OAuthBearerTokenCallback();
+    private ExpiringCredential expiringCredentialForNegotiatedProperty = null;
 
     enum State {
         SEND_CLIENT_FIRST_MESSAGE, RECEIVE_SERVER_FIRST_MESSAGE, RECEIVE_SERVER_MESSAGE_AFTER_FAILURE, COMPLETE, FAILED
@@ -83,8 +86,21 @@ public class OAuthBearerSaslClient implements SaslClient {
 
     @Override
     public byte[] evaluateChallenge(byte[] challenge) throws SaslException {
+        /*
+         * Note that previously this method invoked callbackHandler().handle(new
+         * Callback[] {callback}) in both the SEND_CLIENT_FIRST_MESSAGE and
+         * RECEIVE_SERVER_FIRST_MESSAGE states. It was theoretically possible that the
+         * credential received by the callback handler in the SEND_CLIENT_FIRST_MESSAGE
+         * state (which it gets from the Subject's private credentials) could be
+         * replaced by the background login refresh thread before this method is invoked
+         * in the RECEIVE_SERVER_FIRST_MESSAGE state; if this were to happen then the
+         * client would think it had authenticated with the refreshed credential when in
+         * fact it had authenticated with the original, replaced credential. The
+         * solution is to only invoke callbackHandler().handle(new Callback[]
+         * {callback}) once, in the SEND_CLIENT_FIRST_MESSAGE stage, and reuse the same
+         * callback in the RECEIVE_SERVER_FIRST_MESSAGE.
+         */
         try {
-            OAuthBearerTokenCallback callback = new OAuthBearerTokenCallback();
             switch (state) {
                 case SEND_CLIENT_FIRST_MESSAGE:
                     if (challenge != null && challenge.length != 0)
@@ -104,9 +120,12 @@ public class OAuthBearerSaslClient implements SaslClient {
                         setState(State.RECEIVE_SERVER_MESSAGE_AFTER_FAILURE);
                         return new byte[] {BYTE_CONTROL_A};
                     }
-                    callbackHandler().handle(new Callback[] {callback});
-                    if (log.isDebugEnabled())
-                        log.debug("Successfully authenticated as {}", callback.token().principalName());
+                    OAuthBearerToken token = callback.token();
+                    if (log.isDebugEnabled()) {
+                        log.debug("Successfully authenticated as {}", token.principalName());
+                    }
+                    if (token instanceof ExpiringCredential)
+                        expiringCredentialForNegotiatedProperty = (ExpiringCredential) token;
                     setState(State.COMPLETE);
                     return null;
                 default:
@@ -144,11 +163,14 @@ public class OAuthBearerSaslClient implements SaslClient {
     public Object getNegotiatedProperty(String propName) {
         if (!isComplete())
             throw new IllegalStateException("Authentication exchange has not completed");
-        return null;
+        return ExpiringCredential.SASL_CLIENT_NEGOTIATED_PROPERTY_NAME.equals(propName)
+                ? expiringCredentialForNegotiatedProperty
+                : null;
     }
 
     @Override
     public void dispose() {
+        expiringCredentialForNegotiatedProperty = null;
     }
 
     private void setState(State state) {

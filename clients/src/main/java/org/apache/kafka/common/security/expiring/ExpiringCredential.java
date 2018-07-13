@@ -14,14 +14,60 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.kafka.common.security.oauthbearer.internals.expiring;
+package org.apache.kafka.common.security.expiring;
+
+import org.apache.kafka.common.annotation.InterfaceStability;
+import org.apache.kafka.common.config.SaslConfigs;
 
 /**
- * A credential that expires and that can potentially be refreshed
+ * A credential that expires and that can potentially be refreshed; such a
+ * refreshed credential can also potentially be used to re-authenticate an
+ * existing connection.
+ * <p>
+ * The parameters that impact how the refresh algorithm operates are specified
+ * as part of the producer/consumer/broker configuration and are as follows. See
+ * the documentation for these properties elsewhere for details.
+ * <table>
+ * <tr>
+ * <th>Producer/Consumer/Broker Configuration Property</th>
+ * </tr>
+ * <tr>
+ * <td>{@code sasl.login.refresh.window.factor}</td>
+ * </tr>
+ * <tr>
+ * <td>{@code sasl.login.refresh.window.jitter}</td>
+ * </tr>
+ * <tr>
+ * <td>{@code sasl.login.refresh.min.period.seconds}</td>
+ * </tr>
+ * <tr>
+ * <td>{@code sasl.login.refresh.min.buffer.seconds}</td>
+ * </tr>
+ * <tr>
+ * <td>{@code sasl.login.refresh.reauthenticate.enable}</td>
+ * </tr>
+ * </table>
+ * <p>
+ * This interface was introduced in 2.1.0 and, while it feels stable, it could
+ * evolve. We will try to evolve the API in a compatible manner, but we reserve
+ * the right to make breaking changes in minor releases, if necessary. We will
+ * update the {@code InterfaceStability} annotation and this notice once the API
+ * is considered stable.
  * 
- * @see ExpiringCredentialRefreshingLogin
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_FACTOR_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC
  */
+@InterfaceStability.Evolving
 public interface ExpiringCredential {
+    /**
+     * The value to use when asking a {@code SaslClient} instance for the
+     * {@code ExpiringCredential} that was used to authenticate, if any
+     */
+    public static final String SASL_CLIENT_NEGOTIATED_PROPERTY_NAME = "Expiring.Credential";
+
     /**
      * The name of the principal to which this credential applies (used only for
      * logging)

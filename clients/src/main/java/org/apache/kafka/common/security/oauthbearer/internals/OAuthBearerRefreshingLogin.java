@@ -27,11 +27,11 @@ import javax.security.auth.login.LoginException;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.Login;
+import org.apache.kafka.common.security.expiring.ExpiringCredential;
+import org.apache.kafka.common.security.expiring.internals.ExpiringCredentialRefreshConfig;
+import org.apache.kafka.common.security.expiring.internals.ExpiringCredentialRefreshingLogin;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerToken;
-import org.apache.kafka.common.security.oauthbearer.internals.expiring.ExpiringCredential;
-import org.apache.kafka.common.security.oauthbearer.internals.expiring.ExpiringCredentialRefreshConfig;
-import org.apache.kafka.common.security.oauthbearer.internals.expiring.ExpiringCredentialRefreshingLogin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,7 +40,11 @@ import org.slf4j.LoggerFactory;
  * server when the credential is an OAuth 2 bearer token communicated over
  * SASL/OAUTHBEARER. An OAuth 2 bearer token has a limited lifetime, and an
  * instance of this class periodically refreshes it so that the client can
- * create new connections to brokers on an ongoing basis.
+ * create new connections to brokers on an ongoing basis. It also wraps any
+ * instance of {@link OAuthBearerToken} so that it also implements
+ * {@link ExpiringCredential} if it does not yet do so; this allows
+ * re-authentication of existing connections with refreshed credentials to occur
+ * if {@code sasl.login.refresh.reauthenticate.enable} is set to {@code true}.
  * <p>
  * This class does not need to be explicitly set via the
  * {@code sasl.login.class} client configuration property or the
@@ -67,6 +71,9 @@ import org.slf4j.LoggerFactory;
  * <tr>
  * <td>{@code sasl.login.refresh.min.buffer.seconds}</td>
  * </tr>
+ * <tr>
+ * <td>{@code sasl.login.refresh.reauthenticate.enable}</td>
+ * </tr>
  * </table>
  * 
  * @see OAuthBearerLoginModule
@@ -74,6 +81,7 @@ import org.slf4j.LoggerFactory;
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC
  */
 public class OAuthBearerRefreshingLogin implements Login {
     private static final Logger log = LoggerFactory.getLogger(OAuthBearerRefreshingLogin.class);
@@ -96,34 +104,18 @@ public class OAuthBearerRefreshingLogin implements Login {
                 classToSynchronizeOnPriorToRefresh) {
             @Override
             public ExpiringCredential expiringCredential() {
+                // convert to ExpiringCredential if necessary so it is refreshed
+                ExpiringCredential retvalExpiringCredential = super.expiringCredential();
+                if (retvalExpiringCredential != null)
+                    return retvalExpiringCredential;
                 Set<OAuthBearerToken> privateCredentialTokens = expiringCredentialRefreshingLogin.subject()
                         .getPrivateCredentials(OAuthBearerToken.class);
                 if (privateCredentialTokens.isEmpty())
                     return null;
                 final OAuthBearerToken token = privateCredentialTokens.iterator().next();
-                if (log.isDebugEnabled())
-                    log.debug("Found expiring credential with principal '{}'.", token.principalName());
-                return new ExpiringCredential() {
-                    @Override
-                    public String principalName() {
-                        return token.principalName();
-                    }
-
-                    @Override
-                    public Long startTimeMs() {
-                        return token.startTimeMs();
-                    }
-
-                    @Override
-                    public long expireTimeMs() {
-                        return token.lifetimeMs();
-                    }
-
-                    @Override
-                    public Long absoluteLastRefreshTimeMs() {
-                        return null;
-                    }
-                };
+                log.debug("Found expiring credential (OAuth 2 Bearer Token) with principal '{}'.",
+                        token.principalName());
+                return new OAuthBearerTokenExpiringCredential(token);
             }
         };
     }

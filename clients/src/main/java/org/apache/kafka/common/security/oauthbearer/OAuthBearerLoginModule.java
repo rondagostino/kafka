@@ -234,6 +234,7 @@ import org.slf4j.LoggerFactory;
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC
  */
 public class OAuthBearerLoginModule implements LoginModule {
     /**
@@ -314,7 +315,7 @@ public class OAuthBearerLoginModule implements LoginModule {
             extensionsRequiringCommit = EMPTY_EXTENSIONS;
             log.info("CallbackHandler {} does not support SASL extensions. No extensions will be added", callbackHandler.getClass().getName());
         }
-        if (extensionsRequiringCommit ==  null) {
+        if (extensionsRequiringCommit == null) {
             log.error("SASL Extensions cannot be null. Check whether your callback handler is explicitly setting them as null.");
             throw new LoginException("Extensions cannot be null.");
         }

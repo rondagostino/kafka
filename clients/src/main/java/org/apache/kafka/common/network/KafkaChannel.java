@@ -19,6 +19,7 @@ package org.apache.kafka.common.network;
 import org.apache.kafka.common.errors.AuthenticationException;
 import org.apache.kafka.common.memory.MemoryPool;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 
 import java.io.IOException;
@@ -390,5 +391,9 @@ public class KafkaChannel {
     @Override
     public int hashCode() {
         return Objects.hash(id);
+    }
+
+    public void initiateReauthentication(Time time) {
+        // empty
     }
 }

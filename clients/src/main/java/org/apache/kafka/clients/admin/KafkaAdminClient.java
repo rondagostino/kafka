@@ -23,6 +23,7 @@ import org.apache.kafka.clients.ClientResponse;
 import org.apache.kafka.clients.ClientUtils;
 import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.clients.NetworkClient;
+import org.apache.kafka.clients.RequestCompletionHandler;
 import org.apache.kafka.clients.StaleMetadataException;
 import org.apache.kafka.clients.admin.DeleteAclsResult.FilterResult;
 import org.apache.kafka.clients.admin.DeleteAclsResult.FilterResults;
@@ -63,6 +64,7 @@ import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.MetricsReporter;
 import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.network.ChannelBuilder;
+import org.apache.kafka.common.network.SaslChannelBuilder;
 import org.apache.kafka.common.network.Selector;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.requests.AbstractRequest;
@@ -72,6 +74,7 @@ import org.apache.kafka.common.requests.AlterConfigsResponse;
 import org.apache.kafka.common.requests.AlterReplicaLogDirsRequest;
 import org.apache.kafka.common.requests.AlterReplicaLogDirsResponse;
 import org.apache.kafka.common.requests.ApiError;
+import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.CreateAclsRequest;
 import org.apache.kafka.common.requests.CreateAclsRequest.AclCreation;
 import org.apache.kafka.common.requests.CreateAclsResponse;
@@ -114,6 +117,10 @@ import org.apache.kafka.common.requests.OffsetFetchRequest;
 import org.apache.kafka.common.requests.OffsetFetchResponse;
 import org.apache.kafka.common.requests.RenewDelegationTokenRequest;
 import org.apache.kafka.common.requests.RenewDelegationTokenResponse;
+import org.apache.kafka.common.requests.SaslAuthenticateRequest;
+import org.apache.kafka.common.requests.SaslHandshakeRequest;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.security.token.delegation.DelegationToken;
 import org.apache.kafka.common.security.token.delegation.TokenInformation;
 import org.apache.kafka.common.utils.AppInfoParser;
@@ -362,8 +369,99 @@ public class KafkaAdminClient extends AdminClient {
                 true,
                 apiVersions,
                 logContext);
-            return new KafkaAdminClient(config, clientId, time, metadataManager, metrics, networkClient,
+            KafkaAdminClient retvalKafkaAdminClient = new KafkaAdminClient(config, clientId, time, metadataManager, metrics, networkClient,
                 timeoutProcessorFactory, logContext);
+            if (channelBuilder instanceof SaslChannelBuilder)
+                ((SaslChannelBuilder) channelBuilder)
+                        .authenticationRequestEnqueuer(new AuthenticationRequestEnqueuer() {
+                            @Override
+                            public void enqueueRequest(String nodeId,
+                                    ApiVersionsRequest.Builder apiVersionsRequestBuilder,
+                                    AuthenticationRequestCompletionHandler callback) {
+                                retvalKafkaAdminClient.runnable
+                                        .enqueue(retvalKafkaAdminClient.new Call("re-authentication/apiVersions",
+                                                time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
+                                                retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
+                                                        Integer.parseInt(nodeId))) {
+
+                                            @Override
+                                            void handleResponse(AbstractResponse abstractResponse) {
+                                                //ApiVersionsResponse response = (ApiVersionsResponse) abstractResponse;
+                                                // if (response.error() == Errors.NONE
+                                            }
+
+                                            @Override
+                                            void handleFailure(Throwable throwable) {
+                                                // TODO Auto-generated method stub
+
+                                            }
+
+                                            @Override
+                                            ApiVersionsRequest.Builder createRequest(int timeoutMs) {
+                                                return apiVersionsRequestBuilder;
+                                            }
+                                        }, time.milliseconds());
+                            }
+
+                            @Override
+                            public void enqueueRequest(String nodeId,
+                                    SaslHandshakeRequest.Builder saslHandshakeRequestBuilder,
+                                    AuthenticationRequestCompletionHandler callback) {
+                                retvalKafkaAdminClient.runnable
+                                        .enqueue(retvalKafkaAdminClient.new Call("re-authentication/saslHandshake",
+                                                time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
+                                                retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
+                                                        Integer.parseInt(nodeId))) {
+
+                                            @Override
+                                            void handleResponse(AbstractResponse abstractResponse) {
+                                                // TODO Auto-generated method stub
+
+                                            }
+
+                                            @Override
+                                            void handleFailure(Throwable throwable) {
+                                                // TODO Auto-generated method stub
+
+                                            }
+
+                                            @Override
+                                            SaslHandshakeRequest.Builder createRequest(int timeoutMs) {
+                                                return saslHandshakeRequestBuilder;
+                                            }
+                                        }, time.milliseconds());
+                            }
+
+                            @Override
+                            public void enqueueRequest(String nodeId,
+                                    SaslAuthenticateRequest.Builder saslAuthenticateRequestBuilder,
+                                    AuthenticationRequestCompletionHandler callback) {
+                                retvalKafkaAdminClient.runnable
+                                        .enqueue(retvalKafkaAdminClient.new Call("re-authentication/saslAuthenticate",
+                                                time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
+                                                retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
+                                                        Integer.parseInt(nodeId))) {
+
+                                            @Override
+                                            void handleResponse(AbstractResponse abstractResponse) {
+                                                // TODO Auto-generated method stub
+
+                                            }
+
+                                            @Override
+                                            void handleFailure(Throwable throwable) {
+                                                // TODO Auto-generated method stub
+
+                                            }
+
+                                            @Override
+                                            SaslAuthenticateRequest.Builder createRequest(int timeoutMs) {
+                                                return saslAuthenticateRequestBuilder;
+                                            }
+                                        }, time.milliseconds());
+                            }
+                        });
+            return retvalKafkaAdminClient;
         } catch (Throwable exc) {
             closeQuietly(metrics, "Metrics");
             closeQuietly(networkClient, "NetworkClient");
@@ -486,7 +584,7 @@ public class KafkaAdminClient extends AdminClient {
     }
 
     private class ConstantNodeIdProvider implements NodeProvider {
-        private final int nodeId;
+        protected final int nodeId;
 
         ConstantNodeIdProvider(int nodeId) {
             this.nodeId = nodeId;
@@ -537,7 +635,51 @@ public class KafkaAdminClient extends AdminClient {
             return null;
         }
     }
+    
 
+    /**
+     * Provides the node identified by a specific nodeId, but is also
+     * coordinator-aware. The value (MAX_VALUE - originalNode.id) is used as the
+     * coordinator id to allow separate connections for the coordinator in the
+     * underlying network client layer, but there is no such Node in the metadata.
+     * We can deduce the Node that would appear in the metadata for the coordinator
+     * by starting with the Node that corresponds to the originalNode.id and then
+     * adjusting the id.
+     */
+    private class CoordinatorAwareConstantNodeProvider extends ConstantNodeIdProvider {
+        private final boolean potentiallyAdjustForCoordinator;
+
+        CoordinatorAwareConstantNodeProvider(int nodeId) {
+            this(nodeId, true);
+        }
+
+        private CoordinatorAwareConstantNodeProvider(int nodeId, boolean potentiallyAdjustForCoordinator) {
+            super(nodeId);
+            this.potentiallyAdjustForCoordinator = potentiallyAdjustForCoordinator;
+        }
+
+        @Override
+        public Node provide() {
+            Node node = super.provide();
+            /*
+             * The value (MAX_VALUE - originalNode.id) is used as the coordinator id to
+             * allow separate connections for the coordinator in the underlying network
+             * client layer, but there is no such Node in the metadata. We can deduce the
+             * Node that would appear in the metadata for the coordinator by starting with
+             * the Node that corresponds to the originalNode.id and then adjusting the id.
+             */
+            if (node != null || nodeId < 0 || !potentiallyAdjustForCoordinator)
+                // either we have it or we can't/were told not to adjust, so we're done
+                return node;
+            // try to adjust for coordinator
+            int potentialOriginalNodeId = Integer.MAX_VALUE - nodeId;
+            Node potentialOriginalNode = new CoordinatorAwareConstantNodeProvider(nodeId, false).provide();
+            return potentialOriginalNode == null ? null
+                    : new Node(Integer.MAX_VALUE - potentialOriginalNodeId, potentialOriginalNode.host(),
+                            potentialOriginalNode.port(), potentialOriginalNode.rack());
+        }
+    }
+    
     abstract class Call {
         private final boolean internal;
         private final String callName;
@@ -547,16 +689,22 @@ public class KafkaAdminClient extends AdminClient {
         private boolean aborted = false;
         private Node curNode = null;
         private long nextAllowedTryMs = 0;
+        private final RequestCompletionHandler callback;
 
         Call(boolean internal, String callName, long deadlineMs, NodeProvider nodeProvider) {
-            this.internal = internal;
-            this.callName = callName;
-            this.deadlineMs = deadlineMs;
-            this.nodeProvider = nodeProvider;
+            this(internal, callName, deadlineMs, nodeProvider, null);
         }
 
         Call(String callName, long deadlineMs, NodeProvider nodeProvider) {
             this(false, callName, deadlineMs, nodeProvider);
+        }
+
+        Call(boolean internal, String callName, long deadlineMs, NodeProvider nodeProvider, RequestCompletionHandler callback) {
+            this.internal = internal;
+            this.callName = callName;
+            this.deadlineMs = deadlineMs;
+            this.nodeProvider = nodeProvider;
+            this.callback = callback;
         }
 
         protected Node curNode() {
@@ -904,7 +1052,9 @@ public class KafkaAdminClient extends AdminClient {
                         "Internal error sending %s to %s.", call.callName, node)));
                     continue;
                 }
-                ClientRequest clientRequest = client.newClientRequest(node.idString(), requestBuilder, now, true);
+                ClientRequest clientRequest = call.callback == null
+                        ? client.newClientRequest(node.idString(), requestBuilder, now, true)
+                        : client.newClientRequest(node.idString(), requestBuilder, now, true, timeoutMs, call.callback);
                 log.trace("Sending {} to {}. correlationId={}", requestBuilder, node, clientRequest.correlationId());
                 client.send(clientRequest, now);
                 getOrCreateListValue(callsInFlight, node.idString()).add(call);

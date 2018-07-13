@@ -32,6 +32,7 @@ import javax.security.sasl.SaslException;
 import org.apache.kafka.common.errors.IllegalSaslStateException;
 import org.apache.kafka.common.security.auth.SaslExtensions;
 import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
+import org.apache.kafka.common.security.expiring.ExpiringCredential;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerToken;
@@ -55,6 +56,7 @@ public class OAuthBearerSaslClient implements SaslClient {
     static final byte BYTE_CONTROL_A = (byte) 0x01;
     private static final Logger log = LoggerFactory.getLogger(OAuthBearerSaslClient.class);
     private final CallbackHandler callbackHandler;
+    private ExpiringCredential expiringCredentialForNegotiatedProperty = null;
 
     enum State {
         SEND_CLIENT_FIRST_MESSAGE, RECEIVE_SERVER_FIRST_MESSAGE, RECEIVE_SERVER_MESSAGE_AFTER_FAILURE, COMPLETE, FAILED
@@ -104,9 +106,13 @@ public class OAuthBearerSaslClient implements SaslClient {
                         setState(State.RECEIVE_SERVER_MESSAGE_AFTER_FAILURE);
                         return new byte[] {BYTE_CONTROL_A};
                     }
-                    callbackHandler().handle(new Callback[] {callback});
-                    if (log.isDebugEnabled())
-                        log.debug("Successfully authenticated as {}", callback.token().principalName());
+                    callbackHandler().handle(new Callback[] {callback});  // TODO: fix race condition
+                    OAuthBearerToken token = callback.token();
+                    if (log.isDebugEnabled()) {
+                        log.debug("Successfully authenticated as {}", token.principalName());
+                    }
+                    if (token instanceof ExpiringCredential)
+                        expiringCredentialForNegotiatedProperty = (ExpiringCredential) token;
                     setState(State.COMPLETE);
                     return null;
                 default:
@@ -144,11 +150,14 @@ public class OAuthBearerSaslClient implements SaslClient {
     public Object getNegotiatedProperty(String propName) {
         if (!isComplete())
             throw new IllegalStateException("Authentication exchange has not completed");
-        return null;
+        return ExpiringCredential.SASL_CLIENT_NEGOTIATED_PROPERTY_NAME.equals(propName)
+                ? expiringCredentialForNegotiatedProperty
+                : null;
     }
 
     @Override
     public void dispose() throws SaslException {
+        expiringCredentialForNegotiatedProperty = null;
     }
 
     private void setState(State state) {

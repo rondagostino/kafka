@@ -25,6 +25,7 @@ import org.apache.kafka.common.security.JaasContext;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.Login;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.security.authenticator.CredentialCache;
 import org.apache.kafka.common.security.authenticator.DefaultLogin;
 import org.apache.kafka.common.security.authenticator.LoginManager;
@@ -32,6 +33,7 @@ import org.apache.kafka.common.security.authenticator.SaslClientAuthenticator;
 import org.apache.kafka.common.security.authenticator.SaslClientCallbackHandler;
 import org.apache.kafka.common.security.authenticator.SaslServerAuthenticator;
 import org.apache.kafka.common.security.authenticator.SaslServerCallbackHandler;
+import org.apache.kafka.common.security.expiring.internals.ClientChannelCredentialTracker;
 import org.apache.kafka.common.security.kerberos.KerberosClientCallbackHandler;
 import org.apache.kafka.common.security.kerberos.KerberosLogin;
 import org.apache.kafka.common.security.kerberos.KerberosShortNamer;
@@ -62,6 +64,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import javax.security.auth.Subject;
 
@@ -75,6 +78,15 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
     private final Mode mode;
     private final Map<String, JaasContext> jaasContexts;
     private final boolean handshakeRequestEnable;
+    /*
+     * Ideally we would want to declare the authenticationRequestEnqueuer field as
+     * being "final" and set it in the constructor, but it is possible that we might
+     * need the SaslChannelBuilder in order to construct the
+     * authenticationRequestEnqueuer (e.g. if it is defined in a closure that
+     * captures a NetworkClient, which requires the channel builder). We therefore
+     * have to declare a setter and invoke it after the instance becomes available.
+     */
+    private AuthenticationRequestEnqueuer authenticationRequestEnqueuer = null;
     private final CredentialCache credentialCache;
     private final DelegationTokenCache tokenCache;
     private final Map<String, LoginManager> loginManagers;
@@ -141,7 +153,16 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                 // use KerberosLogin only for the LoginContext corresponding to GSSAPI
                 LoginManager loginManager = LoginManager.acquireLoginManager(entry.getValue(), mechanism, defaultLoginClass, configs);
                 loginManagers.put(mechanism, loginManager);
-                subjects.put(mechanism, loginManager.subject());
+                Subject subject = loginManager.subject();
+                if (mode == Mode.CLIENT) {
+                    if (saslLoginRefreshReauthenticateEnable()) {
+                        log.info("SASL Login Refresh Re-Authenticate ENABLED");
+                        if (subject.getPrivateCredentials(ClientChannelCredentialTracker.class).isEmpty())
+                            subject.getPrivateCredentials().add(new ClientChannelCredentialTracker());
+                    } else
+                        log.info("SASL Login Refresh Re-Authenticate DISABLED");
+                }
+                subjects.put(mechanism, subject);
             }
             if (this.securityProtocol == SecurityProtocol.SASL_SSL) {
                 // Disable SSL client authentication as we are using SASL authentication
@@ -182,24 +203,25 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
             SocketChannel socketChannel = (SocketChannel) key.channel();
             Socket socket = socketChannel.socket();
             TransportLayer transportLayer = buildTransportLayer(id, key, socketChannel);
-            Authenticator authenticator;
+            Supplier<Authenticator> authenticatorSupplier;
             if (mode == Mode.SERVER) {
-                authenticator = buildServerAuthenticator(configs,
+                authenticatorSupplier = () -> buildServerAuthenticator(configs,
                         saslCallbackHandlers,
                         id,
                         transportLayer,
                         subjects);
             } else {
                 LoginManager loginManager = loginManagers.get(clientSaslMechanism);
-                authenticator = buildClientAuthenticator(configs,
+                authenticatorSupplier = () -> buildClientAuthenticator(configs,
                         saslCallbackHandlers.get(clientSaslMechanism),
                         id,
                         socket.getInetAddress().getHostName(),
                         loginManager.serviceName(),
+                        authenticationRequestEnqueuer,
                         transportLayer,
                         subjects.get(clientSaslMechanism));
             }
-            return new KafkaChannel(id, transportLayer, authenticator, maxReceiveSize, memoryPool != null ? memoryPool : MemoryPool.NONE);
+            return new KafkaChannel(id, transportLayer, authenticatorSupplier, maxReceiveSize, memoryPool != null ? memoryPool : MemoryPool.NONE);
         } catch (Exception e) {
             log.info("Failed to create channel due to ", e);
             throw new KafkaException(e);
@@ -215,6 +237,17 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
             handler.close();
     }
 
+    public void authenticationRequestEnqueuer(AuthenticationRequestEnqueuer authenticationRequestEnqueuer) {
+        this.authenticationRequestEnqueuer = authenticationRequestEnqueuer;
+    }
+    
+    private boolean saslLoginRefreshReauthenticateEnable() {
+        Object retvalObj = configs.get(SaslConfigs.SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE);
+        return retvalObj == null || !(retvalObj instanceof Boolean) ? false
+                : Boolean.class.cast(retvalObj).booleanValue();
+    }
+
+
     private TransportLayer buildTransportLayer(String id, SelectionKey key, SocketChannel socketChannel) throws IOException {
         if (this.securityProtocol == SecurityProtocol.SASL_SSL) {
             return SslTransportLayer.create(id, key,
@@ -229,7 +262,7 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                Map<String, AuthenticateCallbackHandler> callbackHandlers,
                                                                String id,
                                                                TransportLayer transportLayer,
-                                                               Map<String, Subject> subjects) throws IOException {
+                                                               Map<String, Subject> subjects) {
         return new SaslServerAuthenticator(configs, callbackHandlers, id, subjects,
                 kerberosShortNamer, listenerName, securityProtocol, transportLayer);
     }
@@ -240,9 +273,10 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                String id,
                                                                String serverHost,
                                                                String servicePrincipal,
-                                                               TransportLayer transportLayer, Subject subject) throws IOException {
+                                                               AuthenticationRequestEnqueuer authenticationRequestEnqueuer,
+                                                               TransportLayer transportLayer, Subject subject) {
         return new SaslClientAuthenticator(configs, callbackHandler, id, subject, servicePrincipal,
-                serverHost, clientSaslMechanism, handshakeRequestEnable, transportLayer);
+                serverHost, clientSaslMechanism, handshakeRequestEnable, authenticationRequestEnqueuer, transportLayer);
     }
 
     // Package private for testing

@@ -1052,6 +1052,14 @@ public class NetworkClient implements KafkaClient {
         return newClientRequest(nodeId, requestBuilder, createdTimeMs, expectResponse, defaultRequestTimeoutMs, null);
     }
 
+    public ClientRequest newClientRequest(String nodeId,
+                                          AbstractRequest.Builder<?> requestBuilder,
+                                          long createdTimeMs,
+                                          boolean expectResponse,
+                                          RequestCompletionHandler callback) {
+        return newClientRequest(nodeId, requestBuilder, createdTimeMs, expectResponse, defaultRequestTimeoutMs, callback);
+    }
+    
     @Override
     public ClientRequest newClientRequest(String nodeId,
                                           AbstractRequest.Builder<?> requestBuilder,

@@ -18,6 +18,7 @@
 package kafka.server
 
 import java.util
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import AbstractFetcherThread.ResultWithPartitions
 import kafka.api._
@@ -28,6 +29,8 @@ import kafka.server.epoch.LeaderEpochCache
 import kafka.zk.AdminZkClient
 import org.apache.kafka.clients.FetchSessionHandler
 import org.apache.kafka.common.requests.EpochEndOffset._
+import org.apache.kafka.common.security.authenticator.AuthenticationRequest;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.KafkaStorageException
 import org.apache.kafka.common.internals.FatalExitError
@@ -63,9 +66,16 @@ class ReplicaFetcherThread(name: String,
     s"fetcherId=$fetcherId] ")
   this.logIdent = logContext.logPrefix
 
+  private val authenticationRequests = new ConcurrentLinkedQueue[AuthenticationRequest]()
+
+  private val authenticationRequestEnqueuer : AuthenticationRequestEnqueuer = new AuthenticationRequestEnqueuer() {
+      def enqueueRequest(authenticationRequest: AuthenticationRequest): Unit =
+              authenticationRequests.add(authenticationRequest)
+  }
+
   private val leaderEndpoint = leaderEndpointBlockingSend.getOrElse(
     new ReplicaFetcherBlockingSend(sourceBroker, brokerConfig, metrics, time, fetcherId,
-      s"broker-$replicaId-fetcher-$fetcherId", logContext))
+      s"broker-$replicaId-fetcher-$fetcherId", logContext, authenticationRequestEnqueuer))
 
   // Visible for testing
   private[server] val fetchRequestVersion: Short =
@@ -101,6 +111,16 @@ class ReplicaFetcherThread(name: String,
 
   private def epochCacheOpt(tp: TopicPartition): Option[LeaderEpochCache] =  replicaMgr.getReplica(tp).map(_.epochs.get)
 
+  override def doWork() : Unit = {
+    super.doWork
+    val it = authenticationRequests.iterator()
+    while (it.hasNext()) {
+      val authenticationRequest = it.next()
+      it.remove()
+      val clientResponse = leaderEndpoint.sendRequest(authenticationRequest.requestBuilder(), authenticationRequest.authenticationRequestCompletionHandler)
+    }
+  }
+  
   override def initiateShutdown(): Boolean = {
     val justShutdown = super.initiateShutdown()
     if (justShutdown) {

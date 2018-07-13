@@ -27,12 +27,14 @@ import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.network._
 import org.apache.kafka.common.requests.{TransactionResult, WriteTxnMarkersRequest}
 import org.apache.kafka.common.security.JaasContext
+import org.apache.kafka.common.security.authenticator.AuthenticationRequest;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.utils.{LogContext, Time}
 import org.apache.kafka.common.protocol.Errors
 import org.apache.kafka.common.requests.WriteTxnMarkersRequest.TxnMarkerEntry
 import com.yammer.metrics.core.Gauge
 import java.util
-import java.util.concurrent.{BlockingQueue, ConcurrentHashMap, LinkedBlockingQueue}
+import java.util.concurrent.{BlockingQueue, ConcurrentHashMap, LinkedBlockingQueue, ConcurrentLinkedQueue}
 
 import collection.JavaConverters._
 import scala.collection.{concurrent, immutable}
@@ -80,13 +82,18 @@ object TransactionMarkerChannelManager {
       logContext
     )
 
-    new TransactionMarkerChannelManager(config,
+    val retval = new TransactionMarkerChannelManager(config,
       metadataCache,
       networkClient,
       txnStateManager,
       txnMarkerPurgatory,
       time
     )
+
+    if (channelBuilder.isInstanceOf[SaslChannelBuilder])
+      channelBuilder.asInstanceOf[SaslChannelBuilder].authenticationRequestEnqueuer(retval.authenticationRequestEnqueuer)
+  
+    retval
   }
 
 }
@@ -137,6 +144,13 @@ class TransactionMarkerChannelManager(config: KafkaConfig,
 
   override val requestTimeoutMs: Int = config.requestTimeoutMs
 
+  private val authenticationRequests = new ConcurrentLinkedQueue[AuthenticationRequest]()
+
+  private val authenticationRequestEnqueuer : AuthenticationRequestEnqueuer = new AuthenticationRequestEnqueuer() {
+      def enqueueRequest(authenticationRequest: AuthenticationRequest): Unit =
+              authenticationRequests.add(authenticationRequest)
+  }
+
   newGauge(
     "UnknownDestinationQueueSize",
     new Gauge[Int] {
@@ -151,7 +165,27 @@ class TransactionMarkerChannelManager(config: KafkaConfig,
     }
   )
 
-  override def generateRequests() = drainQueuedTransactionMarkers()
+  override def generateRequests() = {
+    val transactionMarkers = drainQueuedTransactionMarkers()
+    val authenticationRequestAndCompletionHandlers = new util.ArrayList[RequestAndCompletionHandler]()
+    val it = authenticationRequests.iterator()
+    while (it.hasNext()) {
+      val authenticationRequest = it.next()
+      it.remove()
+      val broker = metadataCache.getAliveBrokers.find(_.id == authenticationRequest.nodeId)
+      broker match {
+        case Some(broker) => {
+          val brokerNode = broker.getNode(interBrokerListenerName).get
+          trace(s"Will send enqueued ${authenticationRequest.requestBuilder.apiKey} to destination broker $brokerNode")
+          authenticationRequestAndCompletionHandlers.add(RequestAndCompletionHandler(
+              brokerNode, authenticationRequest.requestBuilder(), authenticationRequest.authenticationRequestCompletionHandler()))
+        }
+        case None =>
+          authenticationRequest.authenticationRequestCompletionHandler().onException(new RuntimeException("broker unavailable"))
+      }
+    }
+    transactionMarkers ++ authenticationRequestAndCompletionHandlers.iterator().asScala
+  }
 
   override def shutdown(): Unit = {
     super.shutdown()

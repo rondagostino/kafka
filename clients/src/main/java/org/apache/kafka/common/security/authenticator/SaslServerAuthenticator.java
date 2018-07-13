@@ -75,6 +75,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -129,7 +130,7 @@ public class SaslServerAuthenticator implements Authenticator {
                                    KerberosShortNamer kerberosNameParser,
                                    ListenerName listenerName,
                                    SecurityProtocol securityProtocol,
-                                   TransportLayer transportLayer) throws IOException {
+                                   TransportLayer transportLayer) {
         this.callbackHandlers = callbackHandlers;
         this.connectionId = connectionId;
         this.subjects = subjects;
@@ -295,6 +296,26 @@ public class SaslServerAuthenticator implements Authenticator {
         return saslState == SaslState.COMPLETE;
     }
 
+    /**
+     * Return the mechanism used to authenticate with this instance, if any,
+     * otherwise null
+     * 
+     * @return the mechanism used to authenticate with this instance, if any,
+     *         otherwise null
+     */
+    public String saslMechanism() {
+        return saslMechanism;
+    }
+
+    /**
+     * Return true if this instance is in the failed state
+     * 
+     * @return true if this instance is in the failed state
+     */
+    public boolean failed() {
+        return saslState == SaslState.FAILED;
+    }
+
     @Override
     public void handleAuthenticationFailure() throws IOException {
         sendAuthenticationFailureResponse();
@@ -400,6 +421,111 @@ public class SaslServerAuthenticator implements Authenticator {
                 }
             }
         }
+    }
+
+    /**
+     * Begin to re-authenticate the connection with a handshake request. This only
+     * occurs beginning with 2.x clients. The state will transition either from
+     * {@link SaslState#INITIAL_REQUEST} to {@link SaslState#AUTHENTICATE} if the
+     * request is valid or to {@link SaslState#FAILED} if the request is invalid.
+     * 
+     * @param requestHeader
+     *            the request header
+     * @param handshakeRequest
+     *            the handshake request that begins the re-authentication process
+     * @return the response to be sent to the client
+     * @throws IOException
+     *             if an error occurs creating the SASL Server instance required to
+     *             parse authenticate requests that are expected to arrive via
+     *             {@link #respondToReauthenticationSaslAuthenticateRequest(RequestHeader, SaslAuthenticateRequest)}
+     */
+    public SaslHandshakeResponse respondToReauthenticationSaslHandshakeRequest(RequestHeader requestHeader,
+            SaslHandshakeRequest handshakeRequest) throws IOException {
+        if (saslState != SaslState.INITIAL_REQUEST) {
+            LOG.warn("Client requested re-authentication handshake while authenticator was in the incorrect state: {}",
+                    saslState);
+            saslState = SaslState.FAILED;
+            return new SaslHandshakeResponse(Errors.ILLEGAL_SASL_STATE, enabledMechanisms);
+        }
+        String clientMechanism = handshakeRequest.mechanism();
+        if (!enabledMechanisms.contains(clientMechanism)) {
+            // should never happen due to checks in KafkaChannel
+            LOG.warn("Client requested re-authentication handshake with unavailable SASL mechanism: {}",
+                    clientMechanism);
+            saslState = SaslState.FAILED;
+            return new SaslHandshakeResponse(Errors.INVALID_REQUEST, enabledMechanisms);
+        }
+        LOG.debug("Handling Kafka re-authentication request {}", requestHeader.apiKey());
+        short apiVersion = requestHeader.apiVersion();
+        if (apiVersion < 1) {
+            LOG.warn("Client requested re-authentication with unsupported API version: {}", apiVersion);
+            saslState = SaslState.FAILED;
+            return new SaslHandshakeResponse(Errors.INVALID_REQUEST, enabledMechanisms);
+        }
+        // not used during re-authentication but will set it anyway
+        enableKafkaSaslAuthenticateHeaders(true);
+        LOG.debug("Using SASL mechanism '{}' provided by client for re-authentication", clientMechanism);
+        createSaslServer(clientMechanism);
+        saslState = SaslState.AUTHENTICATE;
+        LOG.debug("Set saslState={} during re-authentication: {}", saslState, this);
+        return new SaslHandshakeResponse(Errors.NONE, new HashSet<>(Arrays.asList(clientMechanism)));
+    }
+
+    /**
+     * Continue to re-authenticate the connection with an authenticate request. This
+     * only occurs beginning with 2.x clients. The state will transition from
+     * {@link SaslState#AUTHENTICATE} to {@link SaslState#COMPLETE} if the request
+     * is valid and the re-authentication succeeds; it will transition to
+     * {@link SaslState#FAILED} if the request is invalid or the authentication
+     * fails; or it will remain in {@link SaslState#AUTHENTICATE} if the request is
+     * valid and additional token exchanges are required to complete the
+     * re-authentication.
+     * 
+     * @param requestHeader
+     *            the request header
+     * @param authenticateRequest
+     *            the authentication request that continues (and possibly leads to
+     *            completion of) the re-authentication process
+     * @return the response to be sent to the client
+     */
+    public SaslAuthenticateResponse respondToReauthenticationSaslAuthenticateRequest(RequestHeader requestHeader,
+            SaslAuthenticateRequest authenticateRequest) {
+        if (saslState != SaslState.AUTHENTICATE) {
+            LOG.warn(
+                    "Client requested re-authentication token exchange while authenticator was in the incorrect state: {}",
+                    saslState);
+            saslState = SaslState.FAILED;
+            return new SaslAuthenticateResponse(Errors.ILLEGAL_SASL_STATE,
+                    "Must perform successful handshake prior to exchanging tokens");
+        }
+        short apiVersion = requestHeader.apiVersion();
+        if (!ApiKeys.SASL_AUTHENTICATE.isVersionSupported(apiVersion)) {
+            String errorMsg = String.format("Client requested re-authentication with unsupported API version: %d",
+                    apiVersion);
+            LOG.warn(errorMsg);
+            saslState = SaslState.FAILED;
+            return new SaslAuthenticateResponse(Errors.INVALID_REQUEST, errorMsg);
+        }
+        try {
+            byte[] responseToken = saslServer.evaluateResponse(Utils.readBytes(authenticateRequest.saslAuthBytes()));
+            ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
+            if (saslServer.isComplete()) {
+                saslState = SaslState.COMPLETE;
+                LOG.debug("Set saslState={} during re-authentication: {}", saslState, this);
+            }
+            return new SaslAuthenticateResponse(Errors.NONE, null, responseBuf);
+        } catch (SaslAuthenticationException | SaslException e) {
+            String errorMessage = e instanceof SaslAuthenticationException ? e.getMessage()
+                    : "Re-authentication failed due to invalid credentials with SASL mechanism " + saslMechanism;
+            LOG.debug(errorMessage);
+            saslState = SaslState.FAILED;
+            return new SaslAuthenticateResponse(Errors.SASL_AUTHENTICATION_FAILED, errorMessage);
+        }
+    }
+
+    @Override
+    public String toString() {
+        return super.toString() + "/node=" + this.connectionId;
     }
 
     private boolean handleKafkaRequest(byte[] requestBytes) throws IOException, AuthenticationException {

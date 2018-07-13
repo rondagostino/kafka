@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.kafka.common.security.oauthbearer.internals.expiring;
+package org.apache.kafka.common.security.expiring.internals;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -38,7 +38,8 @@ import javax.security.auth.login.LoginException;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.internals.KafkaFutureImpl;
-import org.apache.kafka.common.security.oauthbearer.internals.expiring.ExpiringCredentialRefreshingLogin.LoginContextFactory;
+import org.apache.kafka.common.security.expiring.ExpiringCredential;
+import org.apache.kafka.common.security.expiring.internals.ExpiringCredentialRefreshingLogin.LoginContextFactory;
 import org.apache.kafka.common.utils.MockScheduler;
 import org.apache.kafka.common.utils.MockTime;
 import org.apache.kafka.common.utils.Time;

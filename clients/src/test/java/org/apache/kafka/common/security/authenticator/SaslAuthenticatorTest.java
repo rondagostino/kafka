@@ -19,7 +19,6 @@ package org.apache.kafka.common.security.authenticator;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -98,7 +97,6 @@ import org.junit.Before;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -211,16 +209,9 @@ public class SaslAuthenticatorTest {
         SecurityProtocol securityProtocol = SecurityProtocol.SASL_SSL;
         server = createEchoServer(securityProtocol);
         createSelector(securityProtocol, saslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("127.0.0.1", server.port());
-        try {
-            selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
-            fail("SASL/PLAIN channel created without username");
-        } catch (IOException e) {
-            // Expected exception
-            assertTrue("Channels not closed", selector.channels().isEmpty());
-            for (SelectionKey key : selector.keys())
-                assertFalse("Key not cancelled", key.isValid());
-        }
+        createAndCheckClientAuthenticationFailure(securityProtocol, node, "PLAIN",
+                "Failed to configure SaslClientAuthenticator");
+        server.verifyAuthenticationMetrics(0, 0);
     }
 
     /**
@@ -235,13 +226,9 @@ public class SaslAuthenticatorTest {
         SecurityProtocol securityProtocol = SecurityProtocol.SASL_SSL;
         server = createEchoServer(securityProtocol);
         createSelector(securityProtocol, saslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("127.0.0.1", server.port());
-        try {
-            selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
-            fail("SASL/PLAIN channel created without password");
-        } catch (IOException e) {
-            // Expected exception
-        }
+        createAndCheckClientAuthenticationFailure(securityProtocol, node, "PLAIN",
+                "Failed to configure SaslClientAuthenticator");
+        server.verifyAuthenticationMetrics(0, 0);
     }
 
     /**
@@ -1285,7 +1272,7 @@ public class SaslAuthenticatorTest {
                                                                        Map<String, AuthenticateCallbackHandler> callbackHandlers,
                                                                        String id,
                                                                        TransportLayer transportLayer,
-                                                                       Map<String, Subject> subjects) throws IOException {
+                                                                       Map<String, Subject> subjects) {
                 return new SaslServerAuthenticator(configs, callbackHandlers, id, subjects, null, listenerName, securityProtocol, transportLayer) {
 
                     @Override
@@ -1332,11 +1319,12 @@ public class SaslAuthenticatorTest {
                                                                        String id,
                                                                        String serverHost,
                                                                        String servicePrincipal,
+                                                                       AuthenticationRequestEnqueuer authenticationRequestEnqueuer,
                                                                        TransportLayer transportLayer,
-                                                                       Subject subject) throws IOException {
+                                                                       Subject subject) {
 
                 return new SaslClientAuthenticator(configs, callbackHandler, id, subject,
-                        servicePrincipal, serverHost, saslMechanism, true, transportLayer) {
+                        servicePrincipal, serverHost, saslMechanism, true, authenticationRequestEnqueuer, transportLayer) {
                     @Override
                     protected SaslHandshakeRequest createSaslHandshakeRequest(short version) {
                         return new SaslHandshakeRequest.Builder(saslMechanism).build((short) 0);

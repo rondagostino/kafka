@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.common.security.authenticator;
 
+import org.apache.kafka.clients.ClientResponse;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.NetworkClient;
 import org.apache.kafka.common.KafkaException;
@@ -42,7 +43,10 @@ import org.apache.kafka.common.requests.SaslHandshakeRequest;
 import org.apache.kafka.common.requests.SaslHandshakeResponse;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
+import org.apache.kafka.common.security.authenticator.AuthenticationSuccessOrFailureReceiver.RetryIndication;
+import org.apache.kafka.common.security.expiring.ExpiringCredential;
 import org.apache.kafka.common.security.kerberos.KerberosError;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,8 +77,25 @@ public class SaslClientAuthenticator implements Authenticator {
         INTERMEDIATE,                 // Intermediate state during SASL token exchange, process challenges and send responses
         CLIENT_COMPLETE,              // Sent response to last challenge. If using SaslAuthenticate, wait for authentication status from server, else COMPLETE
         COMPLETE,                     // Authentication sequence complete. If using SaslAuthenticate, this state implies successful authentication.
-        FAILED                        // Failed authentication due to an error at some stage
+        FAILED,                       // Failed authentication due to an error at some stage
+        CLOSED                        // The connection to the server has been closed
     }
+
+    /**
+     * Builder for SaslAuthenticateRequest that uses the version we have determined
+     * we must use rather than the latest available version when {@code build()} is
+     * invoked.
+     */
+    private class SaslAuthenticateRequestBuilder extends SaslAuthenticateRequest.Builder {
+        public SaslAuthenticateRequestBuilder(ByteBuffer saslAuthBytes) {
+            super(saslAuthBytes);
+        }
+
+        @Override
+        public SaslAuthenticateRequest build() {
+            return super.build(saslAuthenticateVersion);
+        }
+    };
 
     private static final Logger LOG = LoggerFactory.getLogger(SaslClientAuthenticator.class);
     private static final short DISABLE_KAFKA_SASL_AUTHENTICATE_HEADER = -1;
@@ -89,6 +110,7 @@ public class SaslClientAuthenticator implements Authenticator {
     private final Map<String, ?> configs;
     private final String clientPrincipalName;
     private final AuthenticateCallbackHandler callbackHandler;
+    private final AuthenticationRequestEnqueuer authenticationRequestEnqueuer;
 
     // buffers used in `authenticate`
     private NetworkReceive netInBuffer;
@@ -113,7 +135,8 @@ public class SaslClientAuthenticator implements Authenticator {
                                    String host,
                                    String mechanism,
                                    boolean handshakeRequestEnable,
-                                   TransportLayer transportLayer) throws IOException {
+                                   AuthenticationRequestEnqueuer authenticationRequestEnqueuer,
+                                   TransportLayer transportLayer) {
         this.node = node;
         this.subject = subject;
         this.callbackHandler = callbackHandler;
@@ -121,6 +144,7 @@ public class SaslClientAuthenticator implements Authenticator {
         this.servicePrincipal = servicePrincipal;
         this.mechanism = mechanism;
         this.correlationId = -1;
+        this.authenticationRequestEnqueuer = authenticationRequestEnqueuer;
         this.transportLayer = transportLayer;
         this.configs = configs;
         this.saslAuthenticateVersion = DISABLE_KAFKA_SASL_AUTHENTICATE_HEADER;
@@ -142,6 +166,14 @@ public class SaslClientAuthenticator implements Authenticator {
         }
     }
 
+    public Subject subject() {
+        return subject;
+    }
+    
+    public AuthenticationRequestEnqueuer authenticationRequestEnqueuer() {
+        return authenticationRequestEnqueuer;
+    }
+    
     private SaslClient createSaslClient() {
         try {
             return Subject.doAs(subject, new PrivilegedExceptionAction<SaslClient>() {
@@ -228,6 +260,8 @@ public class SaslClientAuthenticator implements Authenticator {
             case FAILED:
                 // Should never get here since exception would have been propagated earlier
                 throw new IllegalStateException("SASL handshake has already failed");
+            case CLOSED:
+                throw new IllegalStateException("Connection has already been closed");
         }
     }
 
@@ -322,9 +356,405 @@ public class SaslClientAuthenticator implements Authenticator {
         return saslState == SaslState.COMPLETE;
     }
 
+    /**
+     * Return the {@link ExpiringCredential} that was used to successfully
+     * authenticate, if any, otherwise null
+     * 
+     * @return the {@link ExpiringCredential} that was used to successfully
+     *         authenticate, if any, otherwise null
+     */
+    public ExpiringCredential expiringCredential() {
+        if (!complete())
+            return null;
+        Object saslClientNegotiatedProperty = saslClient
+                .getNegotiatedProperty(ExpiringCredential.SASL_CLIENT_NEGOTIATED_PROPERTY_NAME);
+        if (!(saslClientNegotiatedProperty instanceof ExpiringCredential))
+            return null;
+        return (ExpiringCredential) saslClientNegotiatedProperty;
+    }
+
+    /**
+     * Initiate re-authentication by enqueuing the appropriate initial
+     * re-authentication {@code ApiVersionsRequest} via the
+     * {@link AuthenticationRequestEnqueuer} provided at construction time and
+     * available at {@link #authenticationRequestEnqueuer()} and providing an
+     * {@link AuthenticationRequestCompletionHandler} that can process the result
+     * and enqueue subsequent requests in the re-authentication dance as well as
+     * provide the ultimate re-authentication success or failure result to the given
+     * authentication success/failure receiver.
+     * 
+     * @param time
+     *            the required {@link Time}
+     * @param authenticationSuccessOrFailureReceiver
+     *            the required receiver of the ultimate re-authentication success or
+     *            failure result
+     */
+    public void initiateReauthentication(Time time,
+            AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        AuthenticationRequestEnqueuer authenticationRequestEnqueuer = authenticationRequestEnqueuer();
+        if (authenticationRequestEnqueuer == null) {
+            // should never happen; don't retry
+            if (saslState != SaslState.CLOSED)
+                saslState = SaslState.FAILED;
+            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                    "Cannot re-authenticate due to no request sender being available (should never happen)");
+            return;
+        }
+        if (saslState != SaslState.SEND_APIVERSIONS_REQUEST) {
+            notifyFailureDueToUnexpectedState(SaslState.SEND_APIVERSIONS_REQUEST,
+                    authenticationSuccessOrFailureReceiver);
+            return;
+        }
+        if (saslClient.isComplete()) {
+            // should never happen; don't retry
+            saslState = SaslState.FAILED;
+            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                    "Re-authentication initiated but SASL Client is already complete (should never happen)");
+            return;
+        }
+        authenticationRequestEnqueuer
+                .enqueueRequest(new AuthenticationRequest(node, new ApiVersionsRequest.Builder((short) 0),
+                        authenticationRequestCompletionHandlerForApiVersionsRequest(time,
+                                authenticationSuccessOrFailureReceiver)));
+    }
+
+    @Override
+    public String toString() {
+        return super.toString() + "/node=" + this.node + "/host=" + host + "/socket="
+                + transportLayer.socketChannel().socket();
+    }
+
+    private AuthenticationRequestCompletionHandler authenticationRequestCompletionHandlerForApiVersionsRequest(
+            Time time, AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        return new AuthenticationRequestCompletionHandler() {
+            @Override
+            public void onComplete(ClientResponse response) {
+                try {
+                    if (saslState == SaslState.SEND_APIVERSIONS_REQUEST) {
+                        saslState = SaslState.RECEIVE_APIVERSIONS_RESPONSE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    }
+                    if (saslState != SaslState.RECEIVE_APIVERSIONS_RESPONSE) {
+                        notifyFailureDueToUnexpectedState(SaslState.RECEIVE_APIVERSIONS_RESPONSE,
+                                authenticationSuccessOrFailureReceiver);
+                        return;
+                    }
+                    ApiVersionsResponse apiVersionsResponse = nonNullResponseBodyOrSetStateAndNotifyFailure(
+                            SaslState.RECEIVE_APIVERSIONS_RESPONSE, response, ApiVersionsResponse.class,
+                            authenticationSuccessOrFailureReceiver);
+                    if (apiVersionsResponse == null)
+                        return;
+                    short saslHandshakeVersion = apiVersionsResponse.apiVersion(ApiKeys.SASL_HANDSHAKE.id).maxVersion;
+                    ApiVersion authenticateVersion = apiVersionsResponse.apiVersion(ApiKeys.SASL_AUTHENTICATE.id);
+                    if (authenticateVersion != null)
+                        saslAuthenticateVersion((short) Math.min(authenticateVersion.maxVersion,
+                                ApiKeys.SASL_AUTHENTICATE.latestVersion()));
+                    if (saslAuthenticateVersion == DISABLE_KAFKA_SASL_AUTHENTICATE_HEADER) {
+                        saslState = SaslState.FAILED;
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                                String.format("Unexpected SASL Authenticate API version (should never happen): %d",
+                                        saslAuthenticateVersion));
+                        return;
+                    }
+                    saslState = SaslState.SEND_HANDSHAKE_REQUEST;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    SaslHandshakeRequest.Builder saslHandshakeRequestBuilder = new SaslHandshakeRequest.Builder(
+                            mechanism) {
+                        public SaslHandshakeRequest build() {
+                            return super.build(saslHandshakeVersion);
+                        }
+                    };
+                    authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
+                            saslHandshakeRequestBuilder,
+                            completionHandlerForSaslHandshakeRequest(time, authenticationSuccessOrFailureReceiver)));
+                } catch (RuntimeException e) {
+                    /*
+                     * Notify failure due to any runtime exceptions; allow retry to occur.
+                     */
+                    if (saslState != SaslState.CLOSED)
+                        saslState = SaslState.FAILED;
+                    authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
+                            String.format("Unexpected exception, will retry: %s", e.getMessage()));
+                }
+            }
+
+            @Override
+            public AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver() {
+                return authenticationSuccessOrFailureReceiver;
+            }
+
+            @Override
+            public void onException(RuntimeException e) {
+                /*
+                 * Notify failure due to any runtime exceptions; allow retry to occur a limited
+                 * number of times.
+                 */
+                LOG.error(e.getMessage(), e);
+                if (saslState != SaslState.CLOSED)
+                    saslState = SaslState.FAILED;
+                authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
+                        .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
+            }
+        };
+    }
+
+    private AuthenticationRequestCompletionHandler completionHandlerForSaslHandshakeRequest(Time time,
+            AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        return new AuthenticationRequestCompletionHandler() {
+            @Override
+            public void onComplete(ClientResponse response) {
+                try {
+                    if (saslState == SaslState.SEND_HANDSHAKE_REQUEST) {
+                        saslState = SaslState.RECEIVE_HANDSHAKE_RESPONSE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    }
+                    if (saslState != SaslState.RECEIVE_HANDSHAKE_RESPONSE) {
+                        notifyFailureDueToUnexpectedState(SaslState.RECEIVE_HANDSHAKE_RESPONSE,
+                                authenticationSuccessOrFailureReceiver);
+                        return;
+                    }
+                    SaslHandshakeResponse saslHandshakeResponse = nonNullResponseBodyOrSetStateAndNotifyFailure(
+                            SaslState.RECEIVE_HANDSHAKE_RESPONSE, response, SaslHandshakeResponse.class,
+                            authenticationSuccessOrFailureReceiver);
+                    if (saslHandshakeResponse == null)
+                        return;
+                    if (saslHandshakeResponse.error() != Errors.NONE)
+                        // this exception will be caught below
+                        throwExceptionForError(saslHandshakeResponse);
+                    saslState = SaslState.INITIAL;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    byte[] clientToken;
+                    try {
+                        clientToken = createSaslToken(new byte[0], true);
+                    } catch (SaslException e) {
+                        saslState = SaslState.FAILED;
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
+                                String.format("Unexpected error creating initial client SASL token, will retry: %s",
+                                        e.getMessage()));
+                        return;
+                    }
+                    if (clientToken == null) {
+                        // should never happen; do not retry
+                        saslState = SaslState.FAILED;
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                                "Unexpected null SASL token (should never happen)");
+                        return;
+                    }
+                    authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
+                            new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)),
+                            completionHandlerForSaslAuthenticateRequest(time, authenticationSuccessOrFailureReceiver)));
+                } catch (RuntimeException e) {
+                    /*
+                     * Notify failure due to any runtime exceptions; allow retry to occur a limited
+                     * number of times
+                     */
+                    LOG.error(e.getMessage(), e);
+                    if (saslState != SaslState.CLOSED)
+                        saslState = SaslState.FAILED;
+                    authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
+                            String.format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
+                }
+            }
+
+            @Override
+            public AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver() {
+                return authenticationSuccessOrFailureReceiver;
+            }
+
+            @Override
+            public void onException(RuntimeException e) {
+                /*
+                 * Notify failure due to any runtime exceptions; allow retry to occur a limited
+                 * number of times.
+                 */
+                LOG.error(e.getMessage(), e);
+                if (saslState != SaslState.CLOSED)
+                    saslState = SaslState.FAILED;
+                authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
+                        .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
+            }
+        };
+    }
+
+    private AuthenticationRequestCompletionHandler completionHandlerForSaslAuthenticateRequest(Time time,
+            AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        return new AuthenticationRequestCompletionHandler() {
+            @Override
+            public void onComplete(ClientResponse response) {
+                try {
+                    if (saslState == SaslState.INITIAL) {
+                        saslState = SaslState.INTERMEDIATE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    }
+                    if (saslState != SaslState.INTERMEDIATE) {
+                        notifyFailureDueToUnexpectedState(SaslState.INTERMEDIATE,
+                                authenticationSuccessOrFailureReceiver);
+                        return;
+                    }
+                    SaslAuthenticateResponse saslAuthenticateResponse = nonNullResponseBodyOrSetStateAndNotifyFailure(
+                            SaslState.INTERMEDIATE, response, SaslAuthenticateResponse.class,
+                            authenticationSuccessOrFailureReceiver);
+                    if (saslAuthenticateResponse == null)
+                        return;
+                    Errors responseError = saslAuthenticateResponse.error();
+                    if (responseError != Errors.NONE) {
+                        String errMsg = saslAuthenticateResponse.errorMessage();
+                        // this exception will be caught below
+                        throw errMsg == null ? responseError.exception() : responseError.exception(errMsg);
+                    }
+                    if (saslClient.isComplete()) {
+                        saslState = SaslState.FAILED;
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                                "SASL Client unexpectedly signaled completion before token exchange (should never happen)");
+                        return;
+                    }
+                    byte[] serverToken = Utils.readBytes(saslAuthenticateResponse.saslAuthBytes());
+                    byte[] clientToken;
+                    try {
+                        clientToken = createSaslToken(serverToken, false);
+                    } catch (SaslException e) {
+                        saslState = SaslState.FAILED;
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
+                                String.format("Unexpected error responding to server's SASL token, will retry: %s",
+                                        e.getMessage()));
+                        return;
+                    }
+                    if (!saslClient.isComplete()) {
+                        if (clientToken == null) {
+                            saslState = SaslState.FAILED;
+                            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                                    "Unexpected null client SASL token when SASL Client is not yet complete (should never happen)");
+                            return;
+                        }
+                        authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
+                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)), this));
+                        return;
+                    }
+                    /*
+                     * Client side is complete; send what we still have to send, if anything.
+                     */
+                    if (clientToken != null) {
+                        saslState = SaslState.CLIENT_COMPLETE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                        authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
+                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)),
+                                completionHandlerForClientCompleteSaslAuthenticateRequest(time,
+                                        authenticationSuccessOrFailureReceiver)));
+                        return;
+                    }
+                    saslState = SaslState.COMPLETE;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    authenticationSuccessOrFailureReceiver.reauthenticationSucceeded();
+                } catch (RuntimeException e) {
+                    /*
+                     * Notify failure due to any runtime exceptions; allow retry to occur a limited
+                     * number of times
+                     */
+                    LOG.error(e.getMessage(), e);
+                    if (saslState != SaslState.CLOSED)
+                        saslState = SaslState.FAILED;
+                    authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
+                            .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
+                }
+            }
+
+            @Override
+            public AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver() {
+                return authenticationSuccessOrFailureReceiver;
+            }
+
+            @Override
+            public void onException(RuntimeException e) {
+                /*
+                 * Notify failure due to any runtime exceptions; allow retry to occur a limited
+                 * number of times.
+                 */
+                LOG.error(e.getMessage(), e);
+                if (saslState != SaslState.CLOSED)
+                    saslState = SaslState.FAILED;
+                authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
+                        .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
+            }
+        };
+    }
+
+    private AuthenticationRequestCompletionHandler completionHandlerForClientCompleteSaslAuthenticateRequest(
+            Time time, AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        return new AuthenticationRequestCompletionHandler() {
+            @Override
+            public void onComplete(ClientResponse response) {
+                try {
+                    SaslAuthenticateResponse saslAuthenticateResponse = nonNullResponseBodyOrSetStateAndNotifyFailure(
+                            SaslState.CLIENT_COMPLETE, response, SaslAuthenticateResponse.class,
+                            authenticationSuccessOrFailureReceiver);
+                    if (saslAuthenticateResponse == null)
+                        return;
+                    Errors responseError = saslAuthenticateResponse.error();
+                    if (responseError != Errors.NONE) {
+                        String errMsg = saslAuthenticateResponse.errorMessage();
+                        // this exception will be caught below
+                        throw errMsg == null ? responseError.exception() : responseError.exception(errMsg);
+                    }
+                    if (!saslClient.isComplete()) {
+                        saslState = SaslState.FAILED;
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                                "SASL Client unexpectedly signaled incomplete after final token exchange (should never happen)");
+                        return;
+                    }
+                    /*
+                     * No need to read the server token; we are done.
+                     */
+                    saslState = SaslState.COMPLETE;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    authenticationSuccessOrFailureReceiver.reauthenticationSucceeded();
+                } catch (RuntimeException e) {
+                    /*
+                     * Notify failure due to any runtime exceptions; allow retry to occur a limited
+                     * number o times.
+                     */
+                    LOG.error(e.getMessage(), e);
+                    if (saslState != SaslState.CLOSED)
+                        saslState = SaslState.FAILED;
+                    authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
+                            .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
+                }
+            }
+
+            @Override
+            public AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver() {
+                return authenticationSuccessOrFailureReceiver;
+            }
+
+            @Override
+            public void onException(RuntimeException e) {
+                /*
+                 * Notify failure due to any runtime exceptions; allow retry to occur a limited
+                 * number of times.
+                 */
+                LOG.error(e.getMessage(), e);
+                if (saslState != SaslState.CLOSED)
+                    saslState = SaslState.FAILED;
+                authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
+                        .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
+            }
+        };
+    }
+
+    private void notifyFailureDueToUnexpectedState(SaslState expectedSaslState,
+            AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        // it is possible that the connection was closed; don't retry
+        SaslState receivedSaslState = saslState;
+        if (saslState != SaslState.CLOSED)
+            saslState = SaslState.FAILED;
+        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY, String.format(
+                "Re-authentication was in process but could not proceed because authenticator state is incorrect (expected %s): %s",
+                expectedSaslState, receivedSaslState));
+    }
+
     public void close() throws IOException {
         if (saslClient != null)
             saslClient.dispose();
+        saslState = SaslState.CLOSED;
     }
 
     private byte[] receiveToken() throws IOException {
@@ -408,11 +838,16 @@ public class SaslClientAuthenticator implements Authenticator {
 
     private void handleSaslHandshakeResponse(SaslHandshakeResponse response) {
         Errors error = response.error();
-        if (error != Errors.NONE)
+        if (error != Errors.NONE) {
             setSaslState(SaslState.FAILED);
+            throwExceptionForError(response);
+        }
+    }
+
+    private void throwExceptionForError(SaslHandshakeResponse response) {
+        Errors error = response.error();
+        LOG.debug("Error={} during (re-)authentication: {}", error, this);
         switch (error) {
-            case NONE:
-                break;
             case UNSUPPORTED_SASL_MECHANISM:
                 throw new UnsupportedSaslMechanismException(String.format("Client SASL mechanism '%s' not enabled in the server, enabled mechanisms are %s",
                     mechanism, response.enabledMechanisms()));
@@ -423,6 +858,52 @@ public class SaslClientAuthenticator implements Authenticator {
                 throw new IllegalSaslStateException(String.format("Unknown error code %s, client mechanism is %s, enabled mechanisms are %s",
                     response.error(), mechanism, response.enabledMechanisms()));
         }
+    }
+
+    private <T> T nonNullResponseBodyOrSetStateAndNotifyFailure(SaslState expectedSaslState, ClientResponse response,
+            Class<? extends T> requiredResponseBodyType,
+            AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        if (saslState != expectedSaslState) {
+            if (saslState != SaslState.CLOSED)
+                saslState = SaslState.FAILED;
+            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                    String.format("Unexpected authenticator state (should never happen); expected %s: %s",
+                            expectedSaslState, saslState));
+            return null;
+        }
+        if (response.authenticationException() != null) {
+            if (saslState != SaslState.CLOSED)
+                saslState = SaslState.FAILED;
+            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                    String.format("Unexpected authentication exception (should never happen): %s",
+                            response.authenticationException().getMessage()));
+            return null;
+        }
+        if (response.wasDisconnected()) {
+            if (saslState != SaslState.CLOSED)
+                saslState = SaslState.FAILED;
+            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                    "Connection was closed");
+            return null;
+        }
+        if (response.versionMismatch() != null) {
+            if (saslState != SaslState.CLOSED)
+                saslState = SaslState.FAILED;
+            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                    "Unexpected version mismatch in API Version response (should never happen)");
+            return null;
+        }
+        AbstractResponse responseBody = response.responseBody();
+        if (responseBody == null || !requiredResponseBodyType.isAssignableFrom(responseBody.getClass())) {
+            if (saslState != SaslState.CLOSED)
+                saslState = SaslState.FAILED;
+            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
+                    String.format("Unexpected response body type, expected %s (should never happen): %s",
+                            requiredResponseBodyType.getSimpleName(),
+                            responseBody == null ? "null" : responseBody.getClass().getSimpleName()));
+            return null;
+        }
+        return requiredResponseBodyType.cast(responseBody);
     }
 
     /**

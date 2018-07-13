@@ -118,6 +118,11 @@ public class SaslConfigs {
             + " Currently applies only to OAUTHBEARER.";
     public static final short DEFAULT_LOGIN_REFRESH_BUFFER_SECONDS = 300;
 
+    public static final String SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE = "sasl.login.refresh.reauthenticate.enable";
+    public static final String SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC = "Whether to enable re-authentication of existing connection credentials"
+            + " when a credential with a limited lifetime (meaning either an OAuthBearerToken or an ExpiringCredential) is refreshed; the default is false.";
+    public static final boolean DEFAULT_LOGIN_REFRESH_REAUTHENTICATE_ENABLE = false;
+
     /**
      * @deprecated As of 1.0.0. This field will be removed in a future major release.
      */
@@ -144,6 +149,7 @@ public class SaslConfigs {
                 .define(SaslConfigs.SASL_LOGIN_REFRESH_WINDOW_JITTER, ConfigDef.Type.DOUBLE, SaslConfigs.DEFAULT_LOGIN_REFRESH_WINDOW_JITTER, Range.between(0.0, 0.25), ConfigDef.Importance.LOW, SaslConfigs.SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC)
                 .define(SaslConfigs.SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS, ConfigDef.Type.SHORT, SaslConfigs.DEFAULT_LOGIN_REFRESH_MIN_PERIOD_SECONDS, Range.between(0, 900), ConfigDef.Importance.LOW, SaslConfigs.SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC)
                 .define(SaslConfigs.SASL_LOGIN_REFRESH_BUFFER_SECONDS, ConfigDef.Type.SHORT, SaslConfigs.DEFAULT_LOGIN_REFRESH_BUFFER_SECONDS, Range.between(0, 3600), ConfigDef.Importance.LOW, SaslConfigs.SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC)
+                .define(SaslConfigs.SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE, ConfigDef.Type.BOOLEAN, SaslConfigs.DEFAULT_LOGIN_REFRESH_REAUTHENTICATE_ENABLE, ConfigDef.Importance.LOW, SaslConfigs.SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC)
                 .define(SaslConfigs.SASL_MECHANISM, ConfigDef.Type.STRING, SaslConfigs.DEFAULT_SASL_MECHANISM, ConfigDef.Importance.MEDIUM, SaslConfigs.SASL_MECHANISM_DOC)
                 .define(SaslConfigs.SASL_JAAS_CONFIG, ConfigDef.Type.PASSWORD, null, ConfigDef.Importance.MEDIUM, SaslConfigs.SASL_JAAS_CONFIG_DOC)
                 .define(SaslConfigs.SASL_CLIENT_CALLBACK_HANDLER_CLASS, ConfigDef.Type.CLASS, null, ConfigDef.Importance.MEDIUM, SaslConfigs.SASL_CLIENT_CALLBACK_HANDLER_CLASS_DOC)

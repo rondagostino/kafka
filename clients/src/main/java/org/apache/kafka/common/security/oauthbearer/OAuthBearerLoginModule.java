@@ -32,8 +32,8 @@ import javax.security.auth.spi.LoginModule;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.Login;
-import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
 import org.apache.kafka.common.security.auth.SaslExtensions;
+import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslClientProvider;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslServerProvider;
 import org.slf4j.Logger;
@@ -234,6 +234,7 @@ import org.slf4j.LoggerFactory;
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC
  */
 public class OAuthBearerLoginModule implements LoginModule {
     /**
@@ -309,13 +310,16 @@ public class OAuthBearerLoginModule implements LoginModule {
             extensionsRequiringCommit = extensionsCallback.extensions();
         } catch (IOException e) {
             log.error(e.getMessage(), e);
-            throw new LoginException("An internal error occurred while retrieving SASL extensions from callback handler");
+            throw new LoginException(
+                    "An internal error occurred while retrieving SASL extensions from callback handler");
         } catch (UnsupportedCallbackException e) {
             extensionsRequiringCommit = EMPTY_EXTENSIONS;
-            log.info("CallbackHandler {} does not support SASL extensions. No extensions will be added", callbackHandler.getClass().getName());
+            log.info("CallbackHandler {} does not support SASL extensions. No extensions will be added",
+                    callbackHandler.getClass().getName());
         }
-        if (extensionsRequiringCommit ==  null) {
-            log.error("SASL Extensions cannot be null. Check whether your callback handler is explicitly setting them as null.");
+        if (extensionsRequiringCommit == null) {
+            log.error(
+                    "SASL Extensions cannot be null. Check whether your callback handler is explicitly setting them as null.");
             throw new LoginException("Extensions cannot be null.");
         }
     }

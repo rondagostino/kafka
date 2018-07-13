@@ -44,6 +44,7 @@ import org.apache.kafka.common.security.auth.SaslExtensions;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerTokenCallback;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerClientInitialResponse;
+import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerTokenExpiringCredential;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -208,7 +209,7 @@ public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCal
                             urlEncoderNoPadding.encodeToString(claimsJson.getBytes(StandardCharsets.UTF_8))),
                     principalClaimName, scopeClaimName);
             log.info("Retrieved token with principal {}", jws.principalName());
-            callback.token(jws);
+            callback.token(new OAuthBearerTokenExpiringCredential(jws));
         } catch (OAuthBearerIllegalTokenException e) {
             // occurs if the principal claim doesn't exist or has an empty value
             throw new OAuthBearerConfigException(e.getMessage(), e);

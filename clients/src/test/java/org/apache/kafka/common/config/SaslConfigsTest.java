@@ -36,6 +36,8 @@ public class SaslConfigsTest {
                 vals.get(SaslConfigs.SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS));
         assertEquals(SaslConfigs.DEFAULT_LOGIN_REFRESH_BUFFER_SECONDS,
                 vals.get(SaslConfigs.SASL_LOGIN_REFRESH_BUFFER_SECONDS));
+        assertEquals(SaslConfigs.DEFAULT_LOGIN_REFRESH_REAUTHENTICATE_ENABLE,
+                vals.get(SaslConfigs.SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE));
     }
 
     @Test

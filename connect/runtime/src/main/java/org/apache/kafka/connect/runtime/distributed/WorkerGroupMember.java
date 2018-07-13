@@ -29,6 +29,7 @@ import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.MetricsReporter;
 import org.apache.kafka.common.network.ChannelBuilder;
+import org.apache.kafka.common.network.SaslChannelBuilder;
 import org.apache.kafka.common.network.Selector;
 import org.apache.kafka.common.utils.AppInfoParser;
 import org.apache.kafka.common.utils.LogContext;
@@ -119,6 +120,9 @@ public class WorkerGroupMember {
                     retryBackoffMs,
                     config.getInt(CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG),
                     Integer.MAX_VALUE);
+            if (channelBuilder instanceof SaslChannelBuilder)
+                ((SaslChannelBuilder) channelBuilder)
+                        .authenticationRequestEnqueuer(client.authenticationRequestEnqueuer());
             this.coordinator = new WorkerCoordinator(
                     logContext,
                     this.client,

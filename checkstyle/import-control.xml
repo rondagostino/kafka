@@ -75,6 +75,7 @@
     </subpackage>
 
     <subpackage name="network">
+      <allow pkg="org.apache.kafka.common.requests" />
       <allow pkg="org.apache.kafka.common.security.auth" />
       <allow pkg="org.apache.kafka.common.protocol" />
       <allow pkg="org.apache.kafka.common.config" />

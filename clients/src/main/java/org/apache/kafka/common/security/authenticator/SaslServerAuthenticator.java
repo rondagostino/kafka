@@ -479,11 +479,9 @@ public class SaslServerAuthenticator implements Authenticator {
      *            the authentication request that continues (and possibly leads to
      *            completion of) the re-authentication process
      * @return the response to be sent to the client
-     * @throws IOException
-     *             if an error occurs while processing the request
      */
     public SaslAuthenticateResponse respondToReauthenticationSaslAuthenticateRequest(RequestHeader requestHeader,
-            SaslAuthenticateRequest authenticateRequest) throws IOException {
+            SaslAuthenticateRequest authenticateRequest) {
         if (saslState != SaslState.AUTHENTICATE) {
             LOG.debug(
                     "Client requested re-authentication token exchange while authenticator was in the incorrect state: {}",

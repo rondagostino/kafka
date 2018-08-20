@@ -307,8 +307,8 @@ public class KafkaChannel {
                 notYetAuthenticatedAuthenticator = null;
             }
             return retvalSaslAuthenticateResponse;
-        } catch (Exception e) {
-            // deal with IOException or unexpected RuntimeException
+        } catch (RuntimeException e) {
+            // deal with unexpected RuntimeException
             log.error(e.getMessage(), e);
             Utils.closeQuietly(notYetAuthenticatedAuthenticator, "notYetAuthenticatedAuthenticator");
             notYetAuthenticatedAuthenticator = null;

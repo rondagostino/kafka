@@ -23,7 +23,6 @@ import org.apache.kafka.clients.ClientResponse;
 import org.apache.kafka.clients.ClientUtils;
 import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.clients.NetworkClient;
-import org.apache.kafka.clients.RequestCompletionHandler;
 import org.apache.kafka.clients.StaleMetadataException;
 import org.apache.kafka.clients.admin.DeleteAclsResult.FilterResult;
 import org.apache.kafka.clients.admin.DeleteAclsResult.FilterResults;
@@ -378,24 +377,12 @@ public class KafkaAdminClient extends AdminClient {
                             public void enqueueRequest(String nodeId,
                                     ApiVersionsRequest.Builder apiVersionsRequestBuilder,
                                     AuthenticationRequestCompletionHandler callback) {
-                                retvalKafkaAdminClient.runnable
-                                        .enqueue(retvalKafkaAdminClient.new Call("re-authentication/apiVersions",
+                                retvalKafkaAdminClient.runnable.enqueue(
+                                        retvalKafkaAdminClient.new ReauthenticationCall("re-authentication/apiVersions",
                                                 time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
                                                 retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
-                                                        Integer.parseInt(nodeId))) {
-
-                                            @Override
-                                            void handleResponse(AbstractResponse abstractResponse) {
-                                                //ApiVersionsResponse response = (ApiVersionsResponse) abstractResponse;
-                                                // if (response.error() == Errors.NONE
-                                            }
-
-                                            @Override
-                                            void handleFailure(Throwable throwable) {
-                                                // TODO Auto-generated method stub
-
-                                            }
-
+                                                        Integer.parseInt(nodeId)),
+                                                callback) {
                                             @Override
                                             ApiVersionsRequest.Builder createRequest(int timeoutMs) {
                                                 return apiVersionsRequestBuilder;
@@ -407,58 +394,34 @@ public class KafkaAdminClient extends AdminClient {
                             public void enqueueRequest(String nodeId,
                                     SaslHandshakeRequest.Builder saslHandshakeRequestBuilder,
                                     AuthenticationRequestCompletionHandler callback) {
-                                retvalKafkaAdminClient.runnable
-                                        .enqueue(retvalKafkaAdminClient.new Call("re-authentication/saslHandshake",
-                                                time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
-                                                retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
-                                                        Integer.parseInt(nodeId))) {
-
-                                            @Override
-                                            void handleResponse(AbstractResponse abstractResponse) {
-                                                // TODO Auto-generated method stub
-
-                                            }
-
-                                            @Override
-                                            void handleFailure(Throwable throwable) {
-                                                // TODO Auto-generated method stub
-
-                                            }
-
-                                            @Override
-                                            SaslHandshakeRequest.Builder createRequest(int timeoutMs) {
-                                                return saslHandshakeRequestBuilder;
-                                            }
-                                        }, time.milliseconds());
+                                retvalKafkaAdminClient.runnable.enqueue(retvalKafkaAdminClient.new ReauthenticationCall(
+                                        "re-authentication/saslHandshake",
+                                        time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
+                                        retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
+                                                Integer.parseInt(nodeId)),
+                                        callback) {
+                                    @Override
+                                    SaslHandshakeRequest.Builder createRequest(int timeoutMs) {
+                                        return saslHandshakeRequestBuilder;
+                                    }
+                                }, time.milliseconds());
                             }
 
                             @Override
                             public void enqueueRequest(String nodeId,
                                     SaslAuthenticateRequest.Builder saslAuthenticateRequestBuilder,
                                     AuthenticationRequestCompletionHandler callback) {
-                                retvalKafkaAdminClient.runnable
-                                        .enqueue(retvalKafkaAdminClient.new Call("re-authentication/saslAuthenticate",
-                                                time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
-                                                retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
-                                                        Integer.parseInt(nodeId))) {
-
-                                            @Override
-                                            void handleResponse(AbstractResponse abstractResponse) {
-                                                // TODO Auto-generated method stub
-
-                                            }
-
-                                            @Override
-                                            void handleFailure(Throwable throwable) {
-                                                // TODO Auto-generated method stub
-
-                                            }
-
-                                            @Override
-                                            SaslAuthenticateRequest.Builder createRequest(int timeoutMs) {
-                                                return saslAuthenticateRequestBuilder;
-                                            }
-                                        }, time.milliseconds());
+                                retvalKafkaAdminClient.runnable.enqueue(retvalKafkaAdminClient.new ReauthenticationCall(
+                                        "re-authentication/saslAuthenticate",
+                                        time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
+                                        retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
+                                                Integer.parseInt(nodeId)),
+                                        callback) {
+                                    @Override
+                                    SaslAuthenticateRequest.Builder createRequest(int timeoutMs) {
+                                        return saslAuthenticateRequestBuilder;
+                                    }
+                                }, time.milliseconds());
                             }
                         });
             return retvalKafkaAdminClient;
@@ -689,7 +652,7 @@ public class KafkaAdminClient extends AdminClient {
         private boolean aborted = false;
         private Node curNode = null;
         private long nextAllowedTryMs = 0;
-        private final RequestCompletionHandler callback;
+        private final AuthenticationRequestCompletionHandler callback;
 
         Call(boolean internal, String callName, long deadlineMs, NodeProvider nodeProvider) {
             this(internal, callName, deadlineMs, nodeProvider, null);
@@ -699,7 +662,7 @@ public class KafkaAdminClient extends AdminClient {
             this(false, callName, deadlineMs, nodeProvider);
         }
 
-        Call(boolean internal, String callName, long deadlineMs, NodeProvider nodeProvider, RequestCompletionHandler callback) {
+        Call(boolean internal, String callName, long deadlineMs, NodeProvider nodeProvider, AuthenticationRequestCompletionHandler callback) {
             this.internal = internal;
             this.callName = callName;
             this.deadlineMs = deadlineMs;
@@ -826,6 +789,31 @@ public class KafkaAdminClient extends AdminClient {
         }
     }
 
+    /*
+     * We can't be sure if our callback handler was invoked when
+     * {@link #fail(long, Throwable)} is called because sometimes {@code fail()} is
+     * called prior to the request being sent and sometimes it is invoked after the
+     * response comes back. Therefore we avoid invoking {@code fail()} altogether
+     * for re-authentication calls and ensure the callback is always leveraged to
+     * report success or failure.
+     */
+    private abstract class ReauthenticationCall extends Call {
+        ReauthenticationCall(String callName, long deadlineMs, NodeProvider nodeProvider,
+                AuthenticationRequestCompletionHandler callback) {
+            super(false, callName, deadlineMs, nodeProvider, callback);
+        }
+
+        @Override
+        void handleResponse(AbstractResponse abstractResponse) {
+            log.warn("handleResponse invoked for re-authentication request (should never happen)");
+        }
+
+        @Override
+        void handleFailure(Throwable throwable) {
+            log.warn("handleFailure invoked for re-authentication request (should never happen)");
+        }        
+    }
+    
     static class TimeoutProcessorFactory {
         TimeoutProcessor create(long now) {
             return new TimeoutProcessor(now);
@@ -868,7 +856,11 @@ public class KafkaAdminClient extends AdminClient {
                 Call call = iter.next();
                 int remainingMs = calcTimeoutMsRemainingAsInt(now, call.deadlineMs);
                 if (remainingMs < 0) {
-                    call.fail(now, new TimeoutException(msg));
+                    TimeoutException timeoutException = new TimeoutException(msg);
+                    if (call.callback != null)
+                        call.callback.onException(timeoutException);
+                    else
+                        call.fail(now, timeoutException);
                     iter.remove();
                     numTimedOut++;
                 } else {
@@ -1015,7 +1007,11 @@ public class KafkaAdminClient extends AdminClient {
             } catch (Throwable t) {
                 // Handle authentication errors while choosing nodes.
                 log.debug("Unable to choose node for {}", call, t);
-                call.fail(now, t);
+                if (call.callback != null)
+                    call.callback.onException(
+                            t instanceof RuntimeException ? (RuntimeException) t : new RuntimeException(t));
+                else
+                    call.fail(now, t);
                 return true;
             }
         }
@@ -1048,8 +1044,12 @@ public class KafkaAdminClient extends AdminClient {
                 try {
                     requestBuilder = call.createRequest(timeoutMs);
                 } catch (Throwable throwable) {
-                    call.fail(now, new KafkaException(String.format(
-                        "Internal error sending %s to %s.", call.callName, node)));
+                    KafkaException exception = new KafkaException(String.format(
+                        "Internal error sending %s to %s.", call.callName, node));
+                    if (call.callback != null)
+                        call.callback.onException(exception);
+                    else
+                        call.fail(now, exception);
                     continue;
                 }
                 ClientRequest clientRequest = call.callback == null
@@ -1129,7 +1129,14 @@ public class KafkaAdminClient extends AdminClient {
                         "that did not exist in callsInFlight", response.destination(), call);
                     continue;
                 }
-
+                
+                /*
+                 * Do not process success or failure here if there was a callback handler to
+                 * process the response.
+                 */
+                if (call.callback != null)
+                    continue;
+                
                 // Handle the result of the call. This may involve retrying the call, if we got a
                 // retryible exception.
                 if (response.versionMismatch() != null) {
@@ -1318,7 +1325,12 @@ public class KafkaAdminClient extends AdminClient {
                 client.wakeup(); // wake the thread if it is in poll()
             } else {
                 log.debug("The AdminClient thread has exited. Timing out {}.", call);
-                call.fail(Long.MAX_VALUE, new TimeoutException("The AdminClient thread has exited."));
+                TimeoutException timeoutException = new TimeoutException("The AdminClient thread has exited.");
+                if (call.callback != null)
+                    call.callback.onException(timeoutException);
+                else {
+                    call.fail(Long.MAX_VALUE, timeoutException);
+                }
             }
         }
 
@@ -1333,7 +1345,11 @@ public class KafkaAdminClient extends AdminClient {
         void call(Call call, long now) {
             if (hardShutdownTimeMs.get() != INVALID_SHUTDOWN_TIME) {
                 log.debug("The AdminClient is not accepting new calls. Timing out {}.", call);
-                call.fail(Long.MAX_VALUE, new TimeoutException("The AdminClient thread is not accepting new calls."));
+                TimeoutException timeoutException = new TimeoutException("The AdminClient thread is not accepting new calls.");
+                if (call.callback != null)
+                    call.callback.onException(timeoutException);
+                else
+                    call.fail(Long.MAX_VALUE, timeoutException);
             } else {
                 enqueue(call, now);
             }

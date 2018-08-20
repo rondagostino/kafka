@@ -33,7 +33,6 @@ import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
-import org.apache.kafka.common.Node;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InterruptException;
@@ -47,15 +46,8 @@ import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.network.ChannelBuilder;
 import org.apache.kafka.common.network.SaslChannelBuilder;
 import org.apache.kafka.common.network.Selector;
-import org.apache.kafka.common.requests.AbstractRequest;
-import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.IsolationLevel;
 import org.apache.kafka.common.requests.MetadataRequest;
-import org.apache.kafka.common.requests.SaslAuthenticateRequest;
-import org.apache.kafka.common.requests.SaslHandshakeRequest;
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
-import org.apache.kafka.common.security.authenticator.AuthenticationSuccessOrFailureReceiver.RetryIndication;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.utils.AppInfoParser;
 import org.apache.kafka.common.utils.LogContext;
@@ -554,66 +546,6 @@ import java.util.regex.Pattern;
  * commit.
  */
 public class KafkaConsumer<K, V> implements Consumer<K, V> {
-    private class KafkaConsumerAuthenticationRequestEnqueuer implements AuthenticationRequestEnqueuer {
-        @Override
-        public void enqueueRequest(String nodeId, ApiVersionsRequest.Builder apiVersionsRequestBuilder,
-                AuthenticationRequestCompletionHandler callback) {
-            enqueue(nodeId, apiVersionsRequestBuilder, callback);
-        }
-
-        @Override
-        public void enqueueRequest(String nodeId, SaslHandshakeRequest.Builder saslHandshakeRequestBuilder,
-                AuthenticationRequestCompletionHandler callback) {
-            enqueue(nodeId, saslHandshakeRequestBuilder, callback);
-        }
-
-        @Override
-        public void enqueueRequest(String nodeId, SaslAuthenticateRequest.Builder saslAuthenticateRequestBuilder,
-                AuthenticationRequestCompletionHandler callback) {
-            enqueue(nodeId, saslAuthenticateRequestBuilder, callback);
-        }
-
-        private void enqueue(String nodeId, AbstractRequest.Builder<? extends AbstractRequest> builder,
-                AuthenticationRequestCompletionHandler callback) {
-            Node node = nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(nodeId);
-            if (node != null) {
-                client.send(node, builder).addListener(callback.requestFutureListener());
-            } else {
-                /*
-                 * This might be a bootstrap connection that is not used anymore, or maybe the
-                 * node is unavailable at the moment. Allow a limited number of retries in case
-                 * the node is temporarily unavailable and it comes back before the connection
-                 * is closed.
-                 */
-                callback.authenticationSuccessOrFailureReceiver().reauthenticationFailed(RetryIndication.RETRY_LIMITED,
-                        String.format(
-                                "Non-existent or unavailable node with id=%s during re-authentication %s; retry a limited number of times",
-                                nodeId, builder.getClass().getEnclosingClass().getSimpleName()));
-            }
-        }
-
-        private Node nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(String nodeId) {
-            int id = Integer.parseInt(nodeId);
-            Node node = metadata.fetch().nodeById(id);
-            /*
-             * The value (MAX_VALUE - originalNode.id) is used as the coordinator id to
-             * allow separate connections for the coordinator in the underlying network
-             * client layer, but there is no such Node in the metadata. We can deduce the
-             * Node that would appear in the metadata for the coordinator by starting with
-             * the Node that corresponds to the originalNode.id and then adjusting the id.
-             */
-            if (node != null || id < 0)
-                // either we have it or we can't adjust, so we're done
-                return node;
-            // try to adjust for coordinator
-            int potentialOriginalNodeId = Integer.MAX_VALUE - id;
-            Node potentialOriginalNode = metadata.fetch().nodeById(potentialOriginalNodeId);
-            return potentialOriginalNode == null ? null
-                    : new Node(Integer.MAX_VALUE - potentialOriginalNodeId, potentialOriginalNode.host(),
-                            potentialOriginalNode.port(), potentialOriginalNode.rack());
-        }
-    }
-
     private static final long NO_CURRENT_THREAD = -1L;
     private static final AtomicInteger CONSUMER_CLIENT_ID_SEQUENCE = new AtomicInteger(1);
     private static final String JMX_PREFIX = "kafka.consumer";
@@ -811,7 +743,8 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     config.getInt(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG),
                     heartbeatIntervalMs); //Will avoid blocking an extended period of time to prevent heartbeat thread starvation
             if (channelBuilder instanceof SaslChannelBuilder)
-                ((SaslChannelBuilder) channelBuilder).authenticationRequestEnqueuer(this.new KafkaConsumerAuthenticationRequestEnqueuer());
+                ((SaslChannelBuilder) channelBuilder)
+                        .authenticationRequestEnqueuer(client.authenticationRequestEnqueuer());
             OffsetResetStrategy offsetResetStrategy = OffsetResetStrategy.valueOf(config.getString(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG).toUpperCase(Locale.ROOT));
             this.subscriptions = new SubscriptionState(offsetResetStrategy);
             this.assignors = config.getConfiguredInstances(

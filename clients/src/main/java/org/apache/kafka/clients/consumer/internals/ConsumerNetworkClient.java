@@ -28,6 +28,12 @@ import org.apache.kafka.common.errors.InterruptException;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.requests.AbstractRequest;
+import org.apache.kafka.common.requests.ApiVersionsRequest;
+import org.apache.kafka.common.requests.SaslAuthenticateRequest;
+import org.apache.kafka.common.requests.SaslHandshakeRequest;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
+import org.apache.kafka.common.security.authenticator.AuthenticationSuccessOrFailureReceiver.RetryIndication;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Timer;
@@ -52,6 +58,66 @@ import java.util.concurrent.locks.ReentrantLock;
  * are held when they are invoked.
  */
 public class ConsumerNetworkClient implements Closeable {
+    private class ConsumerNetworkClientAuthenticationRequestEnqueuer implements AuthenticationRequestEnqueuer {
+        @Override
+        public void enqueueRequest(String nodeId, ApiVersionsRequest.Builder apiVersionsRequestBuilder,
+                AuthenticationRequestCompletionHandler callback) {
+            enqueue(nodeId, apiVersionsRequestBuilder, callback);
+        }
+
+        @Override
+        public void enqueueRequest(String nodeId, SaslHandshakeRequest.Builder saslHandshakeRequestBuilder,
+                AuthenticationRequestCompletionHandler callback) {
+            enqueue(nodeId, saslHandshakeRequestBuilder, callback);
+        }
+
+        @Override
+        public void enqueueRequest(String nodeId, SaslAuthenticateRequest.Builder saslAuthenticateRequestBuilder,
+                AuthenticationRequestCompletionHandler callback) {
+            enqueue(nodeId, saslAuthenticateRequestBuilder, callback);
+        }
+
+        private void enqueue(String nodeId, AbstractRequest.Builder<? extends AbstractRequest> builder,
+                AuthenticationRequestCompletionHandler callback) {
+            Node node = nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(nodeId);
+            if (node != null) {
+                send(node, builder).addListener(callback.requestFutureListener());
+            } else {
+                /*
+                 * This might be a bootstrap connection that is not used anymore, or maybe the
+                 * node is unavailable at the moment. Allow a limited number of retries in case
+                 * the node is temporarily unavailable and it comes back before the connection
+                 * is closed.
+                 */
+                callback.authenticationSuccessOrFailureReceiver().reauthenticationFailed(RetryIndication.RETRY_LIMITED,
+                        String.format(
+                                "Non-existent or unavailable node with id=%s during re-authentication %s; retry a limited number of times",
+                                nodeId, builder.getClass().getEnclosingClass().getSimpleName()));
+            }
+        }
+
+        private Node nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(String nodeId) {
+            int id = Integer.parseInt(nodeId);
+            Node node = metadata.fetch().nodeById(id);
+            /*
+             * The value (MAX_VALUE - originalNode.id) is used as the coordinator id to
+             * allow separate connections for the coordinator in the underlying network
+             * client layer, but there is no such Node in the metadata. We can deduce the
+             * Node that would appear in the metadata for the coordinator by starting with
+             * the Node that corresponds to the originalNode.id and then adjusting the id.
+             */
+            if (node != null || id < 0)
+                // either we have it or we can't adjust, so we're done
+                return node;
+            // try to adjust for coordinator
+            int potentialOriginalNodeId = Integer.MAX_VALUE - id;
+            Node potentialOriginalNode = metadata.fetch().nodeById(potentialOriginalNodeId);
+            return potentialOriginalNode == null ? null
+                    : new Node(Integer.MAX_VALUE - potentialOriginalNodeId, potentialOriginalNode.host(),
+                            potentialOriginalNode.port(), potentialOriginalNode.rack());
+        }
+    }
+
     private static final int MAX_POLL_TIMEOUT_MS = 5000;
 
     // the mutable state of this class is protected by the object's monitor (excluding the wakeup
@@ -79,6 +145,8 @@ public class ConsumerNetworkClient implements Closeable {
     // atomic to avoid the need to acquire the lock above in order to enable it concurrently.
     private final AtomicBoolean wakeup = new AtomicBoolean(false);
 
+    private final AuthenticationRequestEnqueuer consumerNetworkClientAuthenticationRequestEnqueuer;
+
     public ConsumerNetworkClient(LogContext logContext,
                                  KafkaClient client,
                                  Metadata metadata,
@@ -93,6 +161,7 @@ public class ConsumerNetworkClient implements Closeable {
         this.retryBackoffMs = retryBackoffMs;
         this.maxPollTimeoutMs = Math.min(maxPollTimeoutMs, MAX_POLL_TIMEOUT_MS);
         this.requestTimeoutMs = requestTimeoutMs;
+        this.consumerNetworkClientAuthenticationRequestEnqueuer = this.new ConsumerNetworkClientAuthenticationRequestEnqueuer();
     }
 
 
@@ -379,6 +448,10 @@ public class ConsumerNetworkClient implements Closeable {
         }
     }
 
+    public AuthenticationRequestEnqueuer authenticationRequestEnqueuer() {
+        return consumerNetworkClientAuthenticationRequestEnqueuer;
+    }
+    
     private void firePendingCompletedRequests() {
         boolean completedRequestsFired = false;
         for (;;) {

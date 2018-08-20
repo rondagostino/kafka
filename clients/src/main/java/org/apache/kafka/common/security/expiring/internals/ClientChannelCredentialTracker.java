@@ -426,8 +426,7 @@ public class ClientChannelCredentialTracker {
             }
             log.warn(String.format("Channel with id=%s failed re-authentication, retry=%s: %s", channel.id(),
                     retryIndication, errorMessage));
-            if (retryIndication == RetryIndication.DO_NOT_RETRY || (retryIndication == RetryIndication.RETRY_LIMITED
-                    && alreadyRecordedChannelState.failedReauthenticationInfo().numReauthenticationFailures > 2)) {
+            if (!retry(alreadyRecordedChannelState, whenMs, retryIndication)) {
                 log.debug(String.format(
                         "Not retrying re-authentication for channel id=%s; ignoring failed re-authentication event enqueued at %s with retry=%s",
                         channel.id(), new Date(whenMs), retryIndication));
@@ -451,6 +450,15 @@ public class ClientChannelCredentialTracker {
             }
             initiateReauthentication(channel, whenReauthenticateMs);
             purgeExpiredCredentials();
+        }
+
+        private boolean retry(ChannelState channelState, long whenMs, RetryIndication retryIndication) {
+            if (retryIndication == RetryIndication.DO_NOT_RETRY)
+                return false;
+            if (retryIndication == RetryIndication.RETRY_UNLIMITED)
+                return true;
+            // continue to retry as long as the existing credential is active
+            return whenMs < channelState.credential().expireTimeMs();
         }
 
         private void handleChannelDisconnectedEvent(ClientChannelCredentialEvent event) {

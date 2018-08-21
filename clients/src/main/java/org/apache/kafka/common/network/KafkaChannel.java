@@ -300,9 +300,25 @@ public class KafkaChannel {
              * The re-authentication on the SASL Server side can either be completed,
              * failed, or still in progress.
              */
-            if (notYetAuthenticatedAuthenticator.complete())
+            if (notYetAuthenticatedAuthenticator.complete()) {
+                if (!authenticatedAuthenticator.principal().getPrincipalType()
+                        .equals(notYetAuthenticatedAuthenticator.principal().getPrincipalType())
+                        || !authenticatedAuthenticator.principal().getName()
+                                .equals(notYetAuthenticatedAuthenticator.principal().getName())) {
+                    // disallow changing identities upon re-authentication
+                    String errMsg = String.format(
+                            "Not allowed to change identities during re-authentication from %s:%s: %s:%s",
+                            authenticatedAuthenticator.principal().getPrincipalType(),
+                            authenticatedAuthenticator.principal().getName(),
+                            notYetAuthenticatedAuthenticator.principal().getPrincipalType(),
+                            notYetAuthenticatedAuthenticator.principal().getName());
+                    log.error(errMsg);
+                    Utils.closeQuietly(notYetAuthenticatedAuthenticator, errMsg);
+                    notYetAuthenticatedAuthenticator = null;
+                    return new SaslAuthenticateResponse(Errors.SASL_AUTHENTICATION_FAILED, errMsg);
+                }
                 replaceAnyPreviouslyAuthenticatedAuthenticatorWithNewOne();
-            else if (notYetAuthenticatedSaslServerAuthenticator.failed()) {
+            } else if (notYetAuthenticatedSaslServerAuthenticator.failed()) {
                 Utils.closeQuietly(notYetAuthenticatedAuthenticator, "failed notYetAuthenticatedAuthenticator");
                 notYetAuthenticatedAuthenticator = null;
             }

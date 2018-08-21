@@ -18,7 +18,6 @@ package org.apache.kafka.common.security.expiring;
 
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.config.SaslConfigs;
-import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 
 /**
  * A credential that expires and that can potentially be refreshed; such a

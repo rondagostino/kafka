@@ -28,10 +28,7 @@ import org.apache.kafka.common.errors.InterruptException;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.requests.AbstractRequest;
-import org.apache.kafka.common.requests.ApiVersionsRequest;
-import org.apache.kafka.common.requests.SaslAuthenticateRequest;
-import org.apache.kafka.common.requests.SaslHandshakeRequest;
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequest;
 import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.security.authenticator.AuthenticationSuccessOrFailureReceiver.RetryIndication;
 import org.apache.kafka.common.utils.LogContext;
@@ -60,45 +57,27 @@ import java.util.concurrent.locks.ReentrantLock;
 public class ConsumerNetworkClient implements Closeable {
     private class ConsumerNetworkClientAuthenticationRequestEnqueuer implements AuthenticationRequestEnqueuer {
         @Override
-        public void enqueueRequest(String nodeId, ApiVersionsRequest.Builder apiVersionsRequestBuilder,
-                AuthenticationRequestCompletionHandler callback) {
-            enqueue(nodeId, apiVersionsRequestBuilder, callback);
-        }
-
-        @Override
-        public void enqueueRequest(String nodeId, SaslHandshakeRequest.Builder saslHandshakeRequestBuilder,
-                AuthenticationRequestCompletionHandler callback) {
-            enqueue(nodeId, saslHandshakeRequestBuilder, callback);
-        }
-
-        @Override
-        public void enqueueRequest(String nodeId, SaslAuthenticateRequest.Builder saslAuthenticateRequestBuilder,
-                AuthenticationRequestCompletionHandler callback) {
-            enqueue(nodeId, saslAuthenticateRequestBuilder, callback);
-        }
-
-        private void enqueue(String nodeId, AbstractRequest.Builder<? extends AbstractRequest> builder,
-                AuthenticationRequestCompletionHandler callback) {
-            Node node = nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(nodeId);
-            if (node != null) {
-                send(node, builder).addListener(callback.requestFutureListener());
-            } else {
+        public void enqueueRequest(AuthenticationRequest authenticationRequest) {
+            Node node = nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(authenticationRequest.nodeId());
+            if (node != null)
+                send(node, authenticationRequest.requestBuilder()).addListener(
+                        authenticationRequest.authenticationRequestCompletionHandler().requestFutureListener());
+            else {
                 /*
                  * This might be a bootstrap connection that is not used anymore, or maybe the
                  * node is unavailable at the moment. Allow a limited number of retries in case
                  * the node is temporarily unavailable and it comes back before the connection
                  * is closed.
                  */
-                callback.authenticationSuccessOrFailureReceiver().reauthenticationFailed(RetryIndication.RETRY_LIMITED,
-                        String.format(
-                                "Non-existent or unavailable node with id=%s during re-authentication %s; retry a limited number of times",
-                                nodeId, builder.getClass().getEnclosingClass().getSimpleName()));
+                authenticationRequest.authenticationRequestCompletionHandler().authenticationSuccessOrFailureReceiver()
+                        .reauthenticationFailed(RetryIndication.RETRY_LIMITED, String.format(
+                                "Non-existent or unavailable node with id=%s during re-authentication; retry a limited number of times",
+                                authenticationRequest.nodeId()));
             }
         }
 
-        private Node nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(String nodeId) {
-            int id = Integer.parseInt(nodeId);
-            Node node = metadata.fetch().nodeById(id);
+        private Node nodeByNodeIdTakingIntoAccountPotentialCoordinatorAdjustments(int nodeId) {
+            Node node = metadata.fetch().nodeById(nodeId);
             /*
              * The value (MAX_VALUE - originalNode.id) is used as the coordinator id to
              * allow separate connections for the coordinator in the underlying network
@@ -106,11 +85,11 @@ public class ConsumerNetworkClient implements Closeable {
              * Node that would appear in the metadata for the coordinator by starting with
              * the Node that corresponds to the originalNode.id and then adjusting the id.
              */
-            if (node != null || id < 0)
+            if (node != null || nodeId < 0)
                 // either we have it or we can't adjust, so we're done
                 return node;
             // try to adjust for coordinator
-            int potentialOriginalNodeId = Integer.MAX_VALUE - id;
+            int potentialOriginalNodeId = Integer.MAX_VALUE - nodeId;
             Node potentialOriginalNode = metadata.fetch().nodeById(potentialOriginalNodeId);
             return potentialOriginalNode == null ? null
                     : new Node(Integer.MAX_VALUE - potentialOriginalNodeId, potentialOriginalNode.host(),

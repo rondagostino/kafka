@@ -16,62 +16,15 @@
  */
 package org.apache.kafka.common.security.authenticator;
 
-import org.apache.kafka.common.requests.ApiVersionsRequest;
-import org.apache.kafka.common.requests.SaslAuthenticateRequest;
-import org.apache.kafka.common.requests.SaslHandshakeRequest;
-
 /**
  * Enqueues requests related to authentication of connections to brokers
  */
 public interface AuthenticationRequestEnqueuer {
     /**
-     * Create and enqueue a new {@link ApiVersionsRequest}
+     * Create and enqueue a new request
      *
-     * @param nodeId
-     *            the mandatory node to send to
-     * @param apiVersionsRequestBuilder
-     *            the mandatory request builder to use
-     * @param callback
-     *            the mandatory callback to invoke when we get a response. Note that
-     *            this callback must not throw any instances of
-     *            {@code RuntimeException}; instead, it must notify its
-     *            {@link AuthenticationRequestCompletionHandler#authenticationSuccessOrFailureReceiver()}
-     *            about any information related to success or failure.
+     * @param authenticationRequest
+     *            the mandatory authentication trequest to enqueue
      */
-    void enqueueRequest(String nodeId, ApiVersionsRequest.Builder apiVersionsRequestBuilder,
-            AuthenticationRequestCompletionHandler callback);
-
-    /**
-     * Create and enqueue a new {@link SaslHandshakeRequest}
-     *
-     * @param nodeId
-     *            the mandatory node to send to
-     * @param saslHandshakeRequestBuilder
-     *            the mandatory request builder to use
-     * @param callback
-     *            the mandatory callback to invoke when we get a response. Note that
-     *            this callback must not throw any instances of
-     *            {@code RuntimeException}; instead, it must notify its
-     *            {@link AuthenticationRequestCompletionHandler#authenticationSuccessOrFailureReceiver()}
-     *            about any information related to success or failure.
-     */
-    void enqueueRequest(String nodeId, SaslHandshakeRequest.Builder saslHandshakeRequestBuilder,
-            AuthenticationRequestCompletionHandler callback);
-
-    /**
-     * Create and enqueue a new {@link SaslAuthenticateRequest}
-     *
-     * @param nodeId
-     *            the mandatory node to send to
-     * @param saslAuthenticateRequestBuilder
-     *            the mandatory request builder to use
-     * @param callback
-     *            the mandatory callback to invoke when we get a response. Note that
-     *            this callback must not throw any instances of
-     *            {@code RuntimeException}; instead, it must notify its
-     *            {@link AuthenticationRequestCompletionHandler#authenticationSuccessOrFailureReceiver()}
-     *            about any information related to success or failure.
-     */
-    void enqueueRequest(String nodeId, SaslAuthenticateRequest.Builder saslAuthenticateRequestBuilder,
-            AuthenticationRequestCompletionHandler callback);
+    void enqueueRequest(AuthenticationRequest authenticationRequest);
 }

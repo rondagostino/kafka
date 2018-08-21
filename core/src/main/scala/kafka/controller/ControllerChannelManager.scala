@@ -34,6 +34,7 @@ import org.apache.kafka.common.requests._
 import org.apache.kafka.common.security.JaasContext
 import org.apache.kafka.common.security.auth.SecurityProtocol
 import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler
+import org.apache.kafka.common.security.authenticator.AuthenticationRequest
 import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer
 import org.apache.kafka.common.utils.{LogContext, Time}
 import org.apache.kafka.common.{KafkaException, Node, TopicPartition}
@@ -124,17 +125,9 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
       if (channelBuilder.isInstanceOf[SaslChannelBuilder])
         channelBuilder.asInstanceOf[SaslChannelBuilder].authenticationRequestEnqueuer(
           new AuthenticationRequestEnqueuer() {
-            def enqueueRequest(nodeId: String, apiVersionsRequestBuilder: ApiVersionsRequest.Builder,
-              callback: AuthenticationRequestCompletionHandler): Unit =
-                sendRequest(nodeId.toInt, apiVersionsRequestBuilder.apiKey(), apiVersionsRequestBuilder, null, callback)
-
-            def enqueueRequest(nodeId: String, saslHandshakeRequestBuilder: SaslHandshakeRequest.Builder,
-              callback: AuthenticationRequestCompletionHandler): Unit =
-                sendRequest(nodeId.toInt, saslHandshakeRequestBuilder.apiKey(), saslHandshakeRequestBuilder, null, callback)
-
-            def enqueueRequest(nodeId: String, saslAuthenticateRequestBuilder: SaslAuthenticateRequest.Builder,
-              callback: AuthenticationRequestCompletionHandler): Unit =
-                sendRequest(nodeId.toInt, saslAuthenticateRequestBuilder.apiKey(), saslAuthenticateRequestBuilder, null, callback)
+            def enqueueRequest(authenticationRequest: AuthenticationRequest): Unit =
+                sendRequest(authenticationRequest.nodeId(), authenticationRequest.requestBuilder().apiKey(),
+                    authenticationRequest.requestBuilder(), null, authenticationRequest.authenticationRequestCompletionHandler())
           })
       val selector = new Selector(
         NetworkReceive.UNLIMITED,

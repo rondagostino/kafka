@@ -412,9 +412,10 @@ public class SaslClientAuthenticator implements Authenticator {
                     "Re-authentication initiated but SASL Client is already complete (should never happen)");
             return;
         }
-        authenticationRequestEnqueuer.enqueueRequest(node, new ApiVersionsRequest.Builder((short) 0),
-                authenticationRequestCompletionHandlerForApiVersionsRequest(time,
-                        authenticationSuccessOrFailureReceiver));
+        authenticationRequestEnqueuer
+                .enqueueRequest(new AuthenticationRequest(node, new ApiVersionsRequest.Builder((short) 0),
+                        authenticationRequestCompletionHandlerForApiVersionsRequest(time,
+                                authenticationSuccessOrFailureReceiver)));
     }
 
     private AuthenticationRequestCompletionHandler authenticationRequestCompletionHandlerForApiVersionsRequest(
@@ -454,8 +455,9 @@ public class SaslClientAuthenticator implements Authenticator {
                             return super.build(saslHandshakeVersion);
                         }
                     };
-                    authenticationRequestEnqueuer.enqueueRequest(node, saslHandshakeRequestBuilder,
-                            completionHandlerForSaslHandshakeRequest(time, authenticationSuccessOrFailureReceiver));
+                    authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
+                            saslHandshakeRequestBuilder,
+                            completionHandlerForSaslHandshakeRequest(time, authenticationSuccessOrFailureReceiver)));
                 } catch (RuntimeException e) {
                     /*
                      * Notify failure due to any runtime exceptions; allow retry to occur.
@@ -525,9 +527,9 @@ public class SaslClientAuthenticator implements Authenticator {
                                 "Unexpected null SASL token (should never happen)");
                         return;
                     }
-                    authenticationRequestEnqueuer.enqueueRequest(node,
+                    authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
                             new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)),
-                            completionHandlerForSaslAuthenticateRequest(time, authenticationSuccessOrFailureReceiver));
+                            completionHandlerForSaslAuthenticateRequest(time, authenticationSuccessOrFailureReceiver)));
                 } catch (RuntimeException e) {
                     /*
                      * Notify failure due to any runtime exceptions; allow retry to occur a limited
@@ -607,8 +609,8 @@ public class SaslClientAuthenticator implements Authenticator {
                                     "Unexpected null client SASL token when SASL Client is not yet complete (should never happen)");
                             return;
                         }
-                        authenticationRequestEnqueuer.enqueueRequest(node,
-                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)), this);
+                        authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
+                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)), this));
                         return;
                     }
                     /*
@@ -616,10 +618,10 @@ public class SaslClientAuthenticator implements Authenticator {
                      */
                     if (clientToken != null) {
                         saslState = SaslState.CLIENT_COMPLETE;
-                        authenticationRequestEnqueuer.enqueueRequest(node,
+                        authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
                                 new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)),
                                 completionHandlerForClientCompleteSaslAuthenticateRequest(time,
-                                        authenticationSuccessOrFailureReceiver));
+                                        authenticationSuccessOrFailureReceiver)));
                         return;
                     }
                     saslState = SaslState.COMPLETE;

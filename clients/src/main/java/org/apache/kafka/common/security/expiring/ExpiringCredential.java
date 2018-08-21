@@ -55,7 +55,6 @@ import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
  * update the {@code InterfaceStability} annotation and this notice once the API
  * is considered stable.
  * 
- * @see OAuthBearerLoginModule
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_FACTOR_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC

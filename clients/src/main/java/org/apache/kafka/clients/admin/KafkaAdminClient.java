@@ -73,7 +73,6 @@ import org.apache.kafka.common.requests.AlterConfigsResponse;
 import org.apache.kafka.common.requests.AlterReplicaLogDirsRequest;
 import org.apache.kafka.common.requests.AlterReplicaLogDirsResponse;
 import org.apache.kafka.common.requests.ApiError;
-import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.CreateAclsRequest;
 import org.apache.kafka.common.requests.CreateAclsRequest.AclCreation;
 import org.apache.kafka.common.requests.CreateAclsResponse;
@@ -116,8 +115,7 @@ import org.apache.kafka.common.requests.OffsetFetchRequest;
 import org.apache.kafka.common.requests.OffsetFetchResponse;
 import org.apache.kafka.common.requests.RenewDelegationTokenRequest;
 import org.apache.kafka.common.requests.RenewDelegationTokenResponse;
-import org.apache.kafka.common.requests.SaslAuthenticateRequest;
-import org.apache.kafka.common.requests.SaslHandshakeRequest;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequest;
 import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
 import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.security.token.delegation.DelegationToken;
@@ -374,54 +372,18 @@ public class KafkaAdminClient extends AdminClient {
                 ((SaslChannelBuilder) channelBuilder)
                         .authenticationRequestEnqueuer(new AuthenticationRequestEnqueuer() {
                             @Override
-                            public void enqueueRequest(String nodeId,
-                                    ApiVersionsRequest.Builder apiVersionsRequestBuilder,
-                                    AuthenticationRequestCompletionHandler callback) {
-                                retvalKafkaAdminClient.runnable.enqueue(
-                                        retvalKafkaAdminClient.new ReauthenticationCall("re-authentication/apiVersions",
+                            public void enqueueRequest(AuthenticationRequest authenticationRequest) {
+                                retvalKafkaAdminClient.runnable
+                                        .enqueue(retvalKafkaAdminClient.new ReauthenticationCall("re-authentication",
                                                 time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
                                                 retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
-                                                        Integer.parseInt(nodeId)),
-                                                callback) {
+                                                        authenticationRequest.nodeId()),
+                                                authenticationRequest.authenticationRequestCompletionHandler()) {
                                             @Override
-                                            ApiVersionsRequest.Builder createRequest(int timeoutMs) {
-                                                return apiVersionsRequestBuilder;
+                                            AbstractRequest.Builder<?> createRequest(int timeoutMs) {
+                                                return authenticationRequest.requestBuilder();
                                             }
                                         }, time.milliseconds());
-                            }
-
-                            @Override
-                            public void enqueueRequest(String nodeId,
-                                    SaslHandshakeRequest.Builder saslHandshakeRequestBuilder,
-                                    AuthenticationRequestCompletionHandler callback) {
-                                retvalKafkaAdminClient.runnable.enqueue(retvalKafkaAdminClient.new ReauthenticationCall(
-                                        "re-authentication/saslHandshake",
-                                        time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
-                                        retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
-                                                Integer.parseInt(nodeId)),
-                                        callback) {
-                                    @Override
-                                    SaslHandshakeRequest.Builder createRequest(int timeoutMs) {
-                                        return saslHandshakeRequestBuilder;
-                                    }
-                                }, time.milliseconds());
-                            }
-
-                            @Override
-                            public void enqueueRequest(String nodeId,
-                                    SaslAuthenticateRequest.Builder saslAuthenticateRequestBuilder,
-                                    AuthenticationRequestCompletionHandler callback) {
-                                retvalKafkaAdminClient.runnable.enqueue(retvalKafkaAdminClient.new ReauthenticationCall(
-                                        "re-authentication/saslAuthenticate",
-                                        time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
-                                        retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
-                                                Integer.parseInt(nodeId)),
-                                        callback) {
-                                    @Override
-                                    SaslAuthenticateRequest.Builder createRequest(int timeoutMs) {
-                                        return saslAuthenticateRequestBuilder;
-                                    }
-                                }, time.milliseconds());
                             }
                         });
             return retvalKafkaAdminClient;

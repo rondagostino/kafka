@@ -401,12 +401,8 @@ public class SaslClientAuthenticator implements Authenticator {
             return;
         }
         if (saslState != SaslState.SEND_APIVERSIONS_REQUEST) {
-            // it is possible that the connection was closed; don't retry
-            if (saslState != SaslState.CLOSED)
-                saslState = SaslState.FAILED;
-            authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY, String.format(
-                    "Re-authentication initiated but authenticator initial state is incorrect (expected %s): %s",
-                    SaslState.SEND_APIVERSIONS_REQUEST, saslState));
+            notifyFailureDueToUnexpectedState(SaslState.SEND_APIVERSIONS_REQUEST,
+                    authenticationSuccessOrFailureReceiver);
             return;
         }
         if (saslClient.isComplete()) {
@@ -430,13 +426,8 @@ public class SaslClientAuthenticator implements Authenticator {
                     if (saslState == SaslState.SEND_APIVERSIONS_REQUEST)
                         saslState = SaslState.RECEIVE_APIVERSIONS_RESPONSE;
                     if (saslState != SaslState.RECEIVE_APIVERSIONS_RESPONSE) {
-                        // it is possible that the connection was closed; don't retry
-                        if (saslState != SaslState.CLOSED)
-                            saslState = SaslState.FAILED;
-                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
-                                String.format(
-                                        "Re-authentication was in process but could not proceed because authenticator state is incorrect (expected %s): %s",
-                                        SaslState.RECEIVE_APIVERSIONS_RESPONSE, saslState));
+                        notifyFailureDueToUnexpectedState(SaslState.RECEIVE_APIVERSIONS_RESPONSE,
+                                authenticationSuccessOrFailureReceiver);
                         return;
                     }
                     ApiVersionsResponse apiVersionsResponse = nonNullResponseBodyOrSetStateAndNotifyFailure(
@@ -504,13 +495,8 @@ public class SaslClientAuthenticator implements Authenticator {
                     if (saslState == SaslState.SEND_HANDSHAKE_REQUEST)
                         saslState = SaslState.RECEIVE_HANDSHAKE_RESPONSE;
                     if (saslState != SaslState.RECEIVE_HANDSHAKE_RESPONSE) {
-                        // it is possible that the connection was closed; don't retry
-                        if (saslState != SaslState.CLOSED)
-                            saslState = SaslState.FAILED;
-                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
-                                String.format(
-                                        "Re-authentication was in process but could not proceed because authenticator state is incorrect (expected %s): %s",
-                                        SaslState.RECEIVE_HANDSHAKE_RESPONSE, saslState));
+                        notifyFailureDueToUnexpectedState(SaslState.RECEIVE_HANDSHAKE_RESPONSE,
+                                authenticationSuccessOrFailureReceiver);
                         return;
                     }
                     SaslHandshakeResponse saslHandshakeResponse = nonNullResponseBodyOrSetStateAndNotifyFailure(
@@ -582,7 +568,8 @@ public class SaslClientAuthenticator implements Authenticator {
                     if (saslState == SaslState.INITIAL)
                         saslState = SaslState.INTERMEDIATE;
                     if (saslState != SaslState.INTERMEDIATE) {
-                        notifyFailureDueToUnexpectedState(authenticationSuccessOrFailureReceiver);
+                        notifyFailureDueToUnexpectedState(SaslState.INTERMEDIATE,
+                                authenticationSuccessOrFailureReceiver);
                         return;
                     }
                     SaslAuthenticateResponse saslAuthenticateResponse = nonNullResponseBodyOrSetStateAndNotifyFailure(
@@ -647,17 +634,6 @@ public class SaslClientAuthenticator implements Authenticator {
                     authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
                             .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
                 }
-            }
-
-            private void notifyFailureDueToUnexpectedState(
-                    AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
-                // it is possible that the connection was closed; don't retry
-                if (saslState != SaslState.CLOSED)
-                    saslState = SaslState.FAILED;
-                authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
-                        String.format(
-                                "Re-authentication was in process but could not proceed because authenticator state is incorrect (expected %s): %s",
-                                SaslState.INTERMEDIATE, saslState));
             }
 
             @Override
@@ -736,6 +712,17 @@ public class SaslClientAuthenticator implements Authenticator {
                         .format("Unexpected exception, will retry a limited number of times: %s", e.getMessage()));
             }
         };
+    }
+
+    private void notifyFailureDueToUnexpectedState(SaslState expectedSaslState,
+            AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
+        // it is possible that the connection was closed; don't retry
+        SaslState receivedSaslState = saslState;
+        if (saslState != SaslState.CLOSED)
+            saslState = SaslState.FAILED;
+        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY, String.format(
+                "Re-authentication was in process but could not proceed because authenticator state is incorrect (expected %s): %s",
+                expectedSaslState, receivedSaslState));
     }
 
     public void close() throws IOException {

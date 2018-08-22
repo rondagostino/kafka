@@ -55,6 +55,8 @@ import org.apache.kafka.common.requests.InitProducerIdResponse;
 import org.apache.kafka.common.requests.ProduceRequest;
 import org.apache.kafka.common.requests.ProduceResponse;
 import org.apache.kafka.common.requests.RequestHeader;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequest;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
@@ -66,6 +68,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.apache.kafka.common.record.RecordBatch.NO_TIMESTAMP;
 
@@ -124,7 +127,17 @@ public class Sender implements Runnable {
 
     // A per-partition queue of batches ordered by creation time for tracking the in-flight batches
     private final Map<TopicPartition, List<ProducerBatch>> inFlightBatches;
+    
+    private final ConcurrentLinkedQueue<AuthenticationRequest> authenticationRequests = new ConcurrentLinkedQueue<>();
+    private final AuthenticationRequestEnqueuer authenticationRequestEnqueuer = new SenderAuthenticationRequestEnqueuer();
 
+    private class SenderAuthenticationRequestEnqueuer implements AuthenticationRequestEnqueuer {
+        @Override
+        public void enqueueRequest(AuthenticationRequest authenticationRequest) {
+            authenticationRequests.add(authenticationRequest);
+        }
+    }
+    
     public Sender(LogContext logContext,
                   KafkaClient client,
                   Metadata metadata,
@@ -305,6 +318,17 @@ public class Sender implements Runnable {
                 log.trace("Authentication exception while processing transactional request: {}", e);
                 transactionManager.authenticationFailed(e);
             }
+        }
+
+        // send all enqueued authentication requests
+        while (true) {
+            AuthenticationRequest authenticationRequest = authenticationRequests.poll();
+            if (authenticationRequest != null)
+                client.send(client.newClientRequest(String.valueOf(authenticationRequest.nodeId()),
+                        authenticationRequest.requestBuilder(), now, true, requestTimeoutMs,
+                        authenticationRequest.authenticationRequestCompletionHandler()), now);
+            else
+                break;
         }
 
         long pollTimeout = sendProducerData(now);
@@ -807,6 +831,10 @@ public class Sender implements Runnable {
         return produceThrottleTimeSensor;
     }
 
+    public AuthenticationRequestEnqueuer authenticationRequestEnqueuer() {
+        return authenticationRequestEnqueuer;
+    }
+    
     /**
      * A collection of sensors for the sender
      */

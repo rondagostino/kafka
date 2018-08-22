@@ -67,6 +67,7 @@ import java.util.Map;
 import java.util.Set;
 
 public class SaslClientAuthenticator implements Authenticator {
+    private static final Logger log = LoggerFactory.getLogger(SaslClientAuthenticator.class);
 
     public enum SaslState {
         SEND_APIVERSIONS_REQUEST,     // Initial state: client sends ApiVersionsRequest in this state
@@ -480,6 +481,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
+                log.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -535,6 +537,7 @@ public class SaslClientAuthenticator implements Authenticator {
                      * Notify failure due to any runtime exceptions; allow retry to occur a limited
                      * number of times
                      */
+                    log.error(e.getMessage(), e);
                     if (saslState != SaslState.CLOSED)
                         saslState = SaslState.FAILED;
                     authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
@@ -553,6 +556,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
+                log.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -631,6 +635,7 @@ public class SaslClientAuthenticator implements Authenticator {
                      * Notify failure due to any runtime exceptions; allow retry to occur a limited
                      * number of times
                      */
+                    log.error(e.getMessage(), e);
                     if (saslState != SaslState.CLOSED)
                         saslState = SaslState.FAILED;
                     authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -649,6 +654,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
+                log.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -690,6 +696,7 @@ public class SaslClientAuthenticator implements Authenticator {
                      * Notify failure due to any runtime exceptions; allow retry to occur a limited
                      * number o times.
                      */
+                    log.error(e.getMessage(), e);
                     if (saslState != SaslState.CLOSED)
                         saslState = SaslState.FAILED;
                     authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -708,6 +715,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
+                log.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String

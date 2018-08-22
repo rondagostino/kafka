@@ -56,6 +56,7 @@ public class OAuthBearerSaslClient implements SaslClient {
     static final byte BYTE_CONTROL_A = (byte) 0x01;
     private static final Logger log = LoggerFactory.getLogger(OAuthBearerSaslClient.class);
     private final CallbackHandler callbackHandler;
+    private final OAuthBearerTokenCallback callback = new OAuthBearerTokenCallback();
     private ExpiringCredential expiringCredentialForNegotiatedProperty = null;
 
     enum State {
@@ -85,8 +86,21 @@ public class OAuthBearerSaslClient implements SaslClient {
 
     @Override
     public byte[] evaluateChallenge(byte[] challenge) throws SaslException {
+        /*
+         * Note that previously this method invoked callbackHandler().handle(new
+         * Callback[] {callback}) in both the SEND_CLIENT_FIRST_MESSAGE and
+         * RECEIVE_SERVER_FIRST_MESSAGE states. It was theoretically possible that the
+         * credential received by the callback handler in the SEND_CLIENT_FIRST_MESSAGE
+         * state (which it gets from the Subject's private credentials) could be
+         * replaced by the background login refresh thread before this method is invoked
+         * in the RECEIVE_SERVER_FIRST_MESSAGE state; if this were to happen then the
+         * client would think it had authenticated with the refreshed credential when in
+         * fact it had authenticated with the original, replaced credential. The
+         * solution is to only invoke callbackHandler().handle(new Callback[]
+         * {callback}) once, in the SEND_CLIENT_FIRST_MESSAGE stage, and reuse the same
+         * callback in the RECEIVE_SERVER_FIRST_MESSAGE.
+         */
         try {
-            OAuthBearerTokenCallback callback = new OAuthBearerTokenCallback();
             switch (state) {
                 case SEND_CLIENT_FIRST_MESSAGE:
                     if (challenge != null && challenge.length != 0)
@@ -106,7 +120,6 @@ public class OAuthBearerSaslClient implements SaslClient {
                         setState(State.RECEIVE_SERVER_MESSAGE_AFTER_FAILURE);
                         return new byte[] {BYTE_CONTROL_A};
                     }
-                    callbackHandler().handle(new Callback[] {callback});  // TODO: fix race condition
                     OAuthBearerToken token = callback.token();
                     if (log.isDebugEnabled()) {
                         log.debug("Successfully authenticated as {}", token.principalName());

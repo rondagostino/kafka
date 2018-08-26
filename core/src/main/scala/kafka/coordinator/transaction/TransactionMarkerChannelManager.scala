@@ -148,7 +148,8 @@ class TransactionMarkerChannelManager(config: KafkaConfig,
 
   private val authenticationRequestEnqueuer : AuthenticationRequestEnqueuer = new AuthenticationRequestEnqueuer() {
       def enqueueRequest(authenticationRequest: AuthenticationRequest): Unit =
-              authenticationRequests.add(authenticationRequest)}
+              authenticationRequests.add(authenticationRequest)
+  }
 
   newGauge(
     "UnknownDestinationQueueSize",
@@ -168,8 +169,9 @@ class TransactionMarkerChannelManager(config: KafkaConfig,
     val transactionMarkers = drainQueuedTransactionMarkers()
     val authenticationRequestAndCompletionHandlers = new util.ArrayList[RequestAndCompletionHandler]()
     val it = authenticationRequests.iterator()
-    while (it.hasNext) {
+    while (it.hasNext()) {
       val authenticationRequest = it.next()
+      it.remove()
       val broker = metadataCache.getAliveBrokers.find(_.id == config.brokerId)
       broker match {
         case Some(broker) =>

@@ -19,6 +19,7 @@ package org.apache.kafka.common.security.expiring.internals;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -209,9 +210,15 @@ public class ClientChannelCredentialTracker {
          * Every channel that we know about appears as a key in this map; the channel
          * state, including the credential that authenticated the channel (regardless of
          * whether that credential is the ACTIVE state or not) and any failed
-         * re-authentication information, is its value.
+         * re-authentication information, is its value. Note that we use IdentityHashMap
+         * because the KafkaChannel implementation of .equals() is valid only within the
+         * context of a single NetworkClient instance: two separate KafkaChannel
+         * instances from different NetworkClient instances that are connected to the
+         * same node are considered equal according to KafkaChannel's implementation of
+         * .equals(), but for our purposes they are different since they represent
+         * separate connections.
          */
-        private final Map<KafkaChannel, ChannelState> channelStates = new HashMap<>();
+        private final Map<KafkaChannel, ChannelState> channelStates = new IdentityHashMap<>();
         /*
          * Every credential we know about appears as a key in this map; the credential's
          * state (ACTIVE vs. REFRESHED) is its value.
@@ -325,8 +332,11 @@ public class ClientChannelCredentialTracker {
                 long whenMs) {
             requireNonNull(fromCredential);
             requireNonNull(toCredential);
+            int credentialsBeginSize = credentialStates.size();
             CredentialState alreadyRecordedCredentialStateForRefreshedCredential = credentialStates.put(fromCredential,
                     CredentialState.REFRESHED);
+            int credentialsEndSize = credentialStates.size();
+            logNumberOfTrackedCredentials(credentialsBeginSize, credentialsEndSize);
             if (CredentialState.ACTIVE != alreadyRecordedCredentialStateForRefreshedCredential)
                 // either null or REFRESHED, so no channels were associated with it
                 return;
@@ -430,13 +440,19 @@ public class ClientChannelCredentialTracker {
                 log.debug(String.format(
                         "Not retrying re-authentication for channel id=%s; ignoring failed re-authentication event enqueued at %s with retry=%s",
                         channel.id(), new Date(whenMs), retryIndication));
+                int channelsBeginSize = channelStates.size();
                 channelStates.remove(channel);
+                int channelsEndSize = channelStates.size();
+                logNumberOfTrackedChannels(channelsBeginSize, channelsEndSize);
                 purgeExpiredCredentials();
                 return;
             }
             ChannelState newChannelState = new ChannelState(alreadyRecordedChannelState.credential(),
                     new FailedReauthenticationInfo(alreadyRecordedChannelState.failedReauthenticationInfo()));
+            int channelsBeginSize = channelStates.size();
             channelStates.put(channel, newChannelState);
+            int channelsEndSize = channelStates.size();
+            logNumberOfTrackedChannels(channelsBeginSize, channelsEndSize);
             long whenReauthenticateMs;
             switch (newChannelState.failedReauthenticationInfo().numReauthenticationFailures) {
                 case 1:
@@ -480,12 +496,16 @@ public class ClientChannelCredentialTracker {
          */
         private void recordChannelDisconnectedOrClosedEvent(KafkaChannel channel, long whenMs) {
             requireNonNull(channel);
+            int channelsBeginSize = channelStates.size();
             channelStates.remove(channel);
+            int channelsEndSize = channelStates.size();
+            logNumberOfTrackedChannels(channelsBeginSize, channelsEndSize);
             purgeExpiredCredentials();
         }
 
         private void purgeExpiredCredentials() {
             // remove credentials that have been expired for some time
+            int credentialsBeginSize = credentialStates.size();
             long now = time.milliseconds();
             Set<ExpiringCredential> purgedCredentials = new HashSet<>();
             for (Iterator<ExpiringCredential> iterator = this.credentialStates.keySet().iterator(); iterator
@@ -513,13 +533,18 @@ public class ClientChannelCredentialTracker {
                             channel.id(), credential.principalName(), new Date(credential.expireTimeMs()));
                 }
             }
+            int credentialsEndSize = credentialStates.size();
+            logNumberOfTrackedCredentials(credentialsBeginSize, credentialsEndSize);
         }
 
         private Supplier<String> recordAuthenticationEvent(ExpiringCredential credential, KafkaChannel channel,
                 long whenMs, Supplier<String> logMsgSupplierForImmediateReauthentication,
                 Supplier<String> logMsgSupplierForAuthenticationWithAnActiveCredential) {
             ChannelState newChannelState = new ChannelState(credential);
+            int channelsBeginSize = channelStates.size();
             ChannelState alreadyRecordedChannelState = channelStates.put(channel, newChannelState);
+            int channelsEndSize = channelStates.size();
+            logNumberOfTrackedChannels(channelsBeginSize, channelsEndSize);
             Supplier<String> logMsgSuffixSupplier = null;
             if (alreadyRecordedChannelState != null) {
                 if (newChannelState.equals(alreadyRecordedChannelState))
@@ -539,8 +564,12 @@ public class ClientChannelCredentialTracker {
             boolean credentialConsideredExpired = credentialConsideredExpiredIncludingAnyExtraBufferTimeJustToBeSafe(
                     credential, whenMs);
             CredentialState alreadyRecordedCredentialState = null;
-            if (!credentialConsideredExpired)
+            if (!credentialConsideredExpired) {
+                int credentialsBeginSize = credentialStates.size();
                 alreadyRecordedCredentialState = credentialStates.putIfAbsent(credential, CredentialState.ACTIVE);
+                int credentialsEndSize = credentialStates.size();
+                logNumberOfTrackedCredentials(credentialsBeginSize, credentialsEndSize);
+            }
             if (credentialConsideredExpired || CredentialState.REFRESHED == alreadyRecordedCredentialState) {
                 // tell the channel to re-authenticate
                 initiateReauthentication(channel, whenMs);
@@ -555,6 +584,20 @@ public class ClientChannelCredentialTracker {
             final Supplier<String> logMsgSuffixSupplierFinal = logMsgSuffixSupplier;
             return () -> String.format("%s%s", logMsgSupplierForAuthenticationWithAnActiveCredential.get(),
                     logMsgSuffixSupplierFinal.get());
+        }
+
+        private void logNumberOfTrackedCredentials(int beginSize, int endSize) {
+            if (endSize != beginSize)
+                log.info("Number of tracked credentials changed from {} to {}", beginSize, endSize);
+            else
+                log.info("Number of tracked credentials remains {}", endSize);
+        }
+
+        private void logNumberOfTrackedChannels(int beginSize, int endSize) {
+            if (endSize != beginSize)
+                log.info("Number of tracked channels changed from {} to {}", beginSize, endSize);
+            else
+                log.info("Number of tracked channels remains {}", endSize);
         }
 
         /*

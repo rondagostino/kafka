@@ -263,8 +263,10 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                String id,
                                                                TransportLayer transportLayer,
                                                                Map<String, Subject> subjects) {
-        return new SaslServerAuthenticator(configs, callbackHandlers, id, subjects,
+        SaslServerAuthenticator retval = new SaslServerAuthenticator(configs, callbackHandlers, id, subjects,
                 kerberosShortNamer, listenerName, securityProtocol, transportLayer);
+        log.debug("Built: {}", retval);
+        return retval;
     }
 
     // Visible to override for testing
@@ -275,8 +277,11 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                String servicePrincipal,
                                                                AuthenticationRequestEnqueuer authenticationRequestEnqueuer,
                                                                TransportLayer transportLayer, Subject subject) {
-        return new SaslClientAuthenticator(configs, callbackHandler, id, subject, servicePrincipal,
-                serverHost, clientSaslMechanism, handshakeRequestEnable, authenticationRequestEnqueuer, transportLayer);
+        SaslClientAuthenticator retval = new SaslClientAuthenticator(configs, callbackHandler, id, subject,
+                servicePrincipal, serverHost, clientSaslMechanism, handshakeRequestEnable,
+                authenticationRequestEnqueuer, transportLayer);
+        log.debug("Built: {}", retval);
+        return retval;
     }
 
     // Package private for testing

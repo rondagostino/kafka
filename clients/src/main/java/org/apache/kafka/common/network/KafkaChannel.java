@@ -645,8 +645,10 @@ public class KafkaChannel {
          * channel's state based on the ultimate success or failure of the
          * re-authentication attempt.
          */
-        if (notYetAuthenticatedAuthenticator == null)
-            notYetAuthenticatedAuthenticator = authenticatorSupplier.get();
+        if (notYetAuthenticatedAuthenticator != null)
+            failReauthenticationDoNotRetry(clientChannelCredentialTracker,
+                    "Channel seems to already be re-authenticating (should nver happen)");
+        notYetAuthenticatedAuthenticator = authenticatorSupplier.get();
         if (!(notYetAuthenticatedAuthenticator instanceof SaslClientAuthenticator)) {
             // should never happen; don't retry
             String errorMessage = "notYetAuthenticatedAuthenticator of incorrect type: "

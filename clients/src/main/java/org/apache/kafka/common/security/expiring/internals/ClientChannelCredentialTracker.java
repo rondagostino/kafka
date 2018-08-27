@@ -335,6 +335,7 @@ public class ClientChannelCredentialTracker {
             int credentialsBeginSize = credentialStates.size();
             CredentialState alreadyRecordedCredentialStateForRefreshedCredential = credentialStates.put(fromCredential,
                     CredentialState.REFRESHED);
+            credentialStates.putIfAbsent(toCredential, CredentialState.ACTIVE);
             int credentialsEndSize = credentialStates.size();
             logNumberOfTrackedCredentials(credentialsBeginSize, credentialsEndSize);
             if (CredentialState.ACTIVE != alreadyRecordedCredentialStateForRefreshedCredential)

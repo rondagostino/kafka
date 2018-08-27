@@ -172,11 +172,14 @@ class TransactionMarkerChannelManager(config: KafkaConfig,
     while (it.hasNext()) {
       val authenticationRequest = it.next()
       it.remove()
-      val broker = metadataCache.getAliveBrokers.find(_.id == config.brokerId)
+      val broker = metadataCache.getAliveBrokers.find(_.id == authenticationRequest.nodeId)
       broker match {
-        case Some(broker) =>
-                authenticationRequestAndCompletionHandlers.add(RequestAndCompletionHandler(
-                    broker.getNode(interBrokerListenerName).get, authenticationRequest.requestBuilder(), authenticationRequest.authenticationRequestCompletionHandler()))
+        case Some(broker) => {
+          val brokerNode = broker.getNode(interBrokerListenerName).get
+          trace(s"Will send enqueued ${authenticationRequest.requestBuilder.apiKey} to destination broker $brokerNode")
+          authenticationRequestAndCompletionHandlers.add(RequestAndCompletionHandler(
+              brokerNode, authenticationRequest.requestBuilder(), authenticationRequest.authenticationRequestCompletionHandler()))
+        }
         case None =>
           authenticationRequest.authenticationRequestCompletionHandler().onException(new RuntimeException("broker unavailable"))
       }

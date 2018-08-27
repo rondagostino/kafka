@@ -67,7 +67,6 @@ import java.util.Map;
 import java.util.Set;
 
 public class SaslClientAuthenticator implements Authenticator {
-    private static final Logger log = LoggerFactory.getLogger(SaslClientAuthenticator.class);
 
     public enum SaslState {
         SEND_APIVERSIONS_REQUEST,     // Initial state: client sends ApiVersionsRequest in this state
@@ -419,14 +418,22 @@ public class SaslClientAuthenticator implements Authenticator {
                                 authenticationSuccessOrFailureReceiver)));
     }
 
+    @Override
+    public String toString() {
+        return super.toString() + "/node=" + this.node + "/host=" + host + "/socket="
+                + transportLayer.socketChannel().socket();
+    }
+
     private AuthenticationRequestCompletionHandler authenticationRequestCompletionHandlerForApiVersionsRequest(
             Time time, AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
         return new AuthenticationRequestCompletionHandler() {
             @Override
             public void onComplete(ClientResponse response) {
                 try {
-                    if (saslState == SaslState.SEND_APIVERSIONS_REQUEST)
+                    if (saslState == SaslState.SEND_APIVERSIONS_REQUEST) {
                         saslState = SaslState.RECEIVE_APIVERSIONS_RESPONSE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    }
                     if (saslState != SaslState.RECEIVE_APIVERSIONS_RESPONSE) {
                         notifyFailureDueToUnexpectedState(SaslState.RECEIVE_APIVERSIONS_RESPONSE,
                                 authenticationSuccessOrFailureReceiver);
@@ -450,6 +457,7 @@ public class SaslClientAuthenticator implements Authenticator {
                         return;
                     }
                     saslState = SaslState.SEND_HANDSHAKE_REQUEST;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
                     SaslHandshakeRequest.Builder saslHandshakeRequestBuilder = new SaslHandshakeRequest.Builder(
                             mechanism) {
                         public SaslHandshakeRequest build() {
@@ -481,7 +489,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
-                log.error(e.getMessage(), e);
+                LOG.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -496,8 +504,10 @@ public class SaslClientAuthenticator implements Authenticator {
             @Override
             public void onComplete(ClientResponse response) {
                 try {
-                    if (saslState == SaslState.SEND_HANDSHAKE_REQUEST)
+                    if (saslState == SaslState.SEND_HANDSHAKE_REQUEST) {
                         saslState = SaslState.RECEIVE_HANDSHAKE_RESPONSE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    }
                     if (saslState != SaslState.RECEIVE_HANDSHAKE_RESPONSE) {
                         notifyFailureDueToUnexpectedState(SaslState.RECEIVE_HANDSHAKE_RESPONSE,
                                 authenticationSuccessOrFailureReceiver);
@@ -512,6 +522,7 @@ public class SaslClientAuthenticator implements Authenticator {
                         // this exception will be caught below
                         throwExceptionForError(saslHandshakeResponse);
                     saslState = SaslState.INITIAL;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
                     byte[] clientToken;
                     try {
                         clientToken = createSaslToken(new byte[0], true);
@@ -537,7 +548,7 @@ public class SaslClientAuthenticator implements Authenticator {
                      * Notify failure due to any runtime exceptions; allow retry to occur a limited
                      * number of times
                      */
-                    log.error(e.getMessage(), e);
+                    LOG.error(e.getMessage(), e);
                     if (saslState != SaslState.CLOSED)
                         saslState = SaslState.FAILED;
                     authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
@@ -556,7 +567,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
-                log.error(e.getMessage(), e);
+                LOG.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -571,8 +582,10 @@ public class SaslClientAuthenticator implements Authenticator {
             @Override
             public void onComplete(ClientResponse response) {
                 try {
-                    if (saslState == SaslState.INITIAL)
+                    if (saslState == SaslState.INITIAL) {
                         saslState = SaslState.INTERMEDIATE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                    }
                     if (saslState != SaslState.INTERMEDIATE) {
                         notifyFailureDueToUnexpectedState(SaslState.INTERMEDIATE,
                                 authenticationSuccessOrFailureReceiver);
@@ -622,6 +635,7 @@ public class SaslClientAuthenticator implements Authenticator {
                      */
                     if (clientToken != null) {
                         saslState = SaslState.CLIENT_COMPLETE;
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
                         authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
                                 new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)),
                                 completionHandlerForClientCompleteSaslAuthenticateRequest(time,
@@ -629,13 +643,14 @@ public class SaslClientAuthenticator implements Authenticator {
                         return;
                     }
                     saslState = SaslState.COMPLETE;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
                     authenticationSuccessOrFailureReceiver.reauthenticationSucceeded();
                 } catch (RuntimeException e) {
                     /*
                      * Notify failure due to any runtime exceptions; allow retry to occur a limited
                      * number of times
                      */
-                    log.error(e.getMessage(), e);
+                    LOG.error(e.getMessage(), e);
                     if (saslState != SaslState.CLOSED)
                         saslState = SaslState.FAILED;
                     authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -654,7 +669,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
-                log.error(e.getMessage(), e);
+                LOG.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -690,13 +705,14 @@ public class SaslClientAuthenticator implements Authenticator {
                      * No need to read the server token; we are done.
                      */
                     saslState = SaslState.COMPLETE;
+                    LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
                     authenticationSuccessOrFailureReceiver.reauthenticationSucceeded();
                 } catch (RuntimeException e) {
                     /*
                      * Notify failure due to any runtime exceptions; allow retry to occur a limited
                      * number o times.
                      */
-                    log.error(e.getMessage(), e);
+                    LOG.error(e.getMessage(), e);
                     if (saslState != SaslState.CLOSED)
                         saslState = SaslState.FAILED;
                     authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -715,7 +731,7 @@ public class SaslClientAuthenticator implements Authenticator {
                  * Notify failure due to any runtime exceptions; allow retry to occur a limited
                  * number of times.
                  */
-                log.error(e.getMessage(), e);
+                LOG.error(e.getMessage(), e);
                 if (saslState != SaslState.CLOSED)
                     saslState = SaslState.FAILED;
                 authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED, String
@@ -830,6 +846,7 @@ public class SaslClientAuthenticator implements Authenticator {
 
     private void throwExceptionForError(SaslHandshakeResponse response) {
         Errors error = response.error();
+        LOG.debug("Error={} during (re-)authentication: {}", error, this);
         switch (error) {
             case UNSUPPORTED_SASL_MECHANISM:
                 throw new UnsupportedSaslMechanismException(String.format("Client SASL mechanism '%s' not enabled in the server, enabled mechanisms are %s",
@@ -866,7 +883,7 @@ public class SaslClientAuthenticator implements Authenticator {
             if (saslState != SaslState.CLOSED)
                 saslState = SaslState.FAILED;
             authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
-                    "Connection was closed)");
+                    "Connection was closed");
             return null;
         }
         if (response.versionMismatch() != null) {

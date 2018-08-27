@@ -435,7 +435,7 @@ public class SaslServerAuthenticator implements Authenticator {
     public SaslHandshakeResponse respondToReauthenticationSaslHandshakeRequest(RequestHeader requestHeader,
             SaslHandshakeRequest handshakeRequest) throws IOException {
         if (saslState != SaslState.INITIAL_REQUEST) {
-            LOG.debug("Client requested re-authentication handshake while authenticator was in the incorrect state: {}",
+            LOG.warn("Client requested re-authentication handshake while authenticator was in the incorrect state: {}",
                     saslState);
             saslState = SaslState.FAILED;
             return new SaslHandshakeResponse(Errors.ILLEGAL_SASL_STATE, enabledMechanisms);
@@ -443,7 +443,7 @@ public class SaslServerAuthenticator implements Authenticator {
         String clientMechanism = handshakeRequest.mechanism();
         if (!enabledMechanisms.contains(clientMechanism)) {
             // should never happen due to checks in KafkaChannel
-            LOG.debug("Client requested re-authentication handshake with unavailable SASL mechanism: {}",
+            LOG.warn("Client requested re-authentication handshake with unavailable SASL mechanism: {}",
                     clientMechanism);
             saslState = SaslState.FAILED;
             return new SaslHandshakeResponse(Errors.INVALID_REQUEST, enabledMechanisms);
@@ -451,7 +451,7 @@ public class SaslServerAuthenticator implements Authenticator {
         LOG.debug("Handling Kafka re-authentication request {}", requestHeader.apiKey());
         short apiVersion = requestHeader.apiVersion();
         if (apiVersion < 1) {
-            LOG.debug("Client requested re-authentication with unsupported API version: {}", apiVersion);
+            LOG.warn("Client requested re-authentication with unsupported API version: {}", apiVersion);
             saslState = SaslState.FAILED;
             return new SaslHandshakeResponse(Errors.INVALID_REQUEST, enabledMechanisms);
         }
@@ -460,6 +460,7 @@ public class SaslServerAuthenticator implements Authenticator {
         LOG.debug("Using SASL mechanism '{}' provided by client for re-authentication", clientMechanism);
         createSaslServer(clientMechanism);
         saslState = SaslState.AUTHENTICATE;
+        LOG.debug("Set saslState={} during re-authentication: {}", saslState, this);
         return new SaslHandshakeResponse(Errors.NONE, new HashSet<>(Arrays.asList(clientMechanism)));
     }
 
@@ -483,7 +484,7 @@ public class SaslServerAuthenticator implements Authenticator {
     public SaslAuthenticateResponse respondToReauthenticationSaslAuthenticateRequest(RequestHeader requestHeader,
             SaslAuthenticateRequest authenticateRequest) {
         if (saslState != SaslState.AUTHENTICATE) {
-            LOG.debug(
+            LOG.warn(
                     "Client requested re-authentication token exchange while authenticator was in the incorrect state: {}",
                     saslState);
             saslState = SaslState.FAILED;
@@ -494,15 +495,17 @@ public class SaslServerAuthenticator implements Authenticator {
         if (!ApiKeys.SASL_AUTHENTICATE.isVersionSupported(apiVersion)) {
             String errorMsg = String.format("Client requested re-authentication with unsupported API version: %d",
                     apiVersion);
-            LOG.debug(errorMsg);
+            LOG.warn(errorMsg);
             saslState = SaslState.FAILED;
             return new SaslAuthenticateResponse(Errors.INVALID_REQUEST, errorMsg);
         }
         try {
             byte[] responseToken = saslServer.evaluateResponse(Utils.readBytes(authenticateRequest.saslAuthBytes()));
             ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
-            if (saslServer.isComplete())
+            if (saslServer.isComplete()) {
                 saslState = SaslState.COMPLETE;
+                LOG.debug("Set saslState={} during re-authentication: {}", saslState, this);
+            }
             return new SaslAuthenticateResponse(Errors.NONE, null, responseBuf);
         } catch (SaslAuthenticationException | SaslException e) {
             String errorMessage = e instanceof SaslAuthenticationException ? e.getMessage()
@@ -511,6 +514,11 @@ public class SaslServerAuthenticator implements Authenticator {
             saslState = SaslState.FAILED;
             return new SaslAuthenticateResponse(Errors.SASL_AUTHENTICATION_FAILED, errorMessage);
         }
+    }
+
+    @Override
+    public String toString() {
+        return super.toString() + "/node=" + this.connectionId;
     }
 
     private boolean handleKafkaRequest(byte[] requestBytes) throws IOException, AuthenticationException {

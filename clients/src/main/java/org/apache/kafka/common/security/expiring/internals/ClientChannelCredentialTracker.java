@@ -512,10 +512,8 @@ public class ClientChannelCredentialTracker {
             for (Iterator<ExpiringCredential> iterator = this.credentialStates.keySet().iterator(); iterator
                     .hasNext();) {
                 ExpiringCredential credential = iterator.next();
-                if (credentialConsideredExpiredIncludingAnyExtraBufferTimeJustToBeSafe(credential, now)) {
-                    iterator.remove();
+                if (credentialConsideredExpiredIncludingAnyExtraBufferTimeJustToBeSafe(credential, now))
                     purgedCredentials.add(credential);
-                }
             }
             if (purgedCredentials.isEmpty()) {
                 log.info("No expired credentials purged.  Number of tracked credentials remains {}", credentialsBeginSize);

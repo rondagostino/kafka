@@ -254,7 +254,7 @@ public class ClientChannelCredentialTracker {
                 } catch (InterruptedException e) {
                     // exit the thread
                     log.info(
-                            "Channel credential manager thread interrupted; exiting with current incoming event queue size = {}",
+                            "Client channel credential manager thread interrupted; exiting with current incoming event queue size = {}",
                             incomingEventQueue.size());
                     return;
                 } catch (Exception e) {
@@ -295,12 +295,19 @@ public class ClientChannelCredentialTracker {
                 long whenMs) {
             requireNonNull(credential);
             requireNonNull(channel);
+            if (!channel.ready()) {
+                log.info(
+                        "Ignoring initial authentication event enqueued at {} for not-ready channel (it must have been closed): {}",
+                        new Date(whenMs), channel);
+                return;
+            }
             Supplier<String> logMsgSupplierForImmediateReauthentication = () -> String.format(
                     "Told channel with id=%s that it should immediately re-authenticate after initially authenticating with already-refreshed credential (principal=%s, expiration=%s)",
                     channel.id(), credential.principalName(), new Date(credential.expireTimeMs()));
             Supplier<String> logMsgSupplierForAuthenticationWithAnActiveCredential = () -> String.format(
                     "Initially authenticated channel with id=%s using active credential (principal=%s, expiration=%s)",
                     channel.id(), credential.principalName(), new Date(credential.expireTimeMs()));
+
             Supplier<String> logMsgSupplier = recordAuthenticationEvent(credential, channel, whenMs,
                     logMsgSupplierForImmediateReauthentication, logMsgSupplierForAuthenticationWithAnActiveCredential);
             if (logMsgSupplier != null)
@@ -348,11 +355,17 @@ public class ClientChannelCredentialTracker {
             for (Entry<KafkaChannel, ChannelState> channelState : channelStates.entrySet()) {
                 KafkaChannel channel = channelState.getKey();
                 if (fromCredential.equals(channelState.getValue().credential())) {
-                    initiateReauthentication(channel, whenMs);
-                    log.info(
-                            "Told channel with id={} to re-authenticate due to refresh of credential (principal={}, expiration={}) wth new credential (principal={}, expiration={})",
-                            channel.id(), fromCredential.principalName(), new Date(fromCredential.expireTimeMs()),
-                            toCredential.principalName(), new Date(toCredential.expireTimeMs()));
+                    if (!channel.ready())
+                        log.info(
+                                "Ignoring need to re-authenticate channel due to credential refresh enqueued at {}; channel is not ready (it must have been closed): {}",
+                                new Date(whenMs), channel);
+                    else {
+                        initiateReauthentication(channel, whenMs);
+                        log.info(
+                                "Told channel with id={} to re-authenticate due to refresh of credential (principal={}, expiration={}) wth new credential (principal={}, expiration={})",
+                                channel.id(), fromCredential.principalName(), new Date(fromCredential.expireTimeMs()),
+                                toCredential.principalName(), new Date(toCredential.expireTimeMs()));
+                    }
                 }
             }
             purgeExpiredCredentials();
@@ -385,6 +398,12 @@ public class ClientChannelCredentialTracker {
                 long whenMs) {
             requireNonNull(credential);
             requireNonNull(channel);
+            if (!channel.ready()) {
+                log.info(
+                        "Ignoring re-authentication event enqueued at {} for not-ready channel (it must have been closed): {}",
+                        new Date(whenMs), channel);
+                return;
+            }
             Supplier<String> logMsgSupplierForImmediateReauthentication = () -> String.format(
                     "Told channel with id=%s that it should immediately re-authenticate after upon re-authenticating with already-refreshed credential (principal=%s, expiration=%s)",
                     channel.id(), credential.principalName(), new Date(credential.expireTimeMs()));
@@ -428,6 +447,12 @@ public class ClientChannelCredentialTracker {
         private void recordChannelFailedReauthenticationEvent(KafkaChannel channel, long whenMs,
                 RetryIndication retryIndication, String errorMessage) {
             requireNonNull(channel);
+            if (!channel.ready()) {
+                log.info(
+                        "Ignoring failed re-authentication event enqueued at {} for not-ready channel (it must have been closed): {}",
+                        new Date(whenMs), channel);
+                return;
+            }
             ChannelState alreadyRecordedChannelState = channelStates.get(channel);
             if (alreadyRecordedChannelState == null) {
                 log.debug(String.format(
@@ -516,11 +541,12 @@ public class ClientChannelCredentialTracker {
                     purgedCredentials.add(credential);
             }
             if (purgedCredentials.isEmpty()) {
-                log.info("No expired credentials purged.  Number of tracked credentials remains {}", credentialsBeginSize);
+                log.info("No expired credentials purged.  Number of tracked credentials remains {}",
+                        credentialsBeginSize);
                 return;
             }
-            log.info("Will purge {} expired credentials.  Number of tracked credentials prior to purge is {}", purgedCredentials.size(),
-                    credentialsBeginSize);
+            log.info("Will purge {} expired credentials.  Number of tracked credentials prior to purge is {}",
+                    purgedCredentials.size(), credentialsBeginSize);
             /*
              * Tell any channel still authenticated with a purged credential to
              * re-authenticate. This should never happen in general, but we do it just to be
@@ -530,10 +556,16 @@ public class ClientChannelCredentialTracker {
                 ExpiringCredential credential = entry.getValue().credential();
                 if (purgedCredentials.contains(credential)) {
                     KafkaChannel channel = entry.getKey();
-                    initiateReauthentication(channel, now);
-                    log.warn(
-                            "Told channel with id={} to re-authenticate because it is still using an expired credential that we are going to purge (principal={}, expiration={}); this should generally not happen",
-                            channel.id(), credential.principalName(), new Date(credential.expireTimeMs()));
+                    if (!channel.ready())
+                        log.info(
+                                "Ignoring need to re-authenticate channel due to association with a credential being purged; channel is not ready (it must have been closed): {}",
+                                channel);
+                    else {
+                        initiateReauthentication(channel, now);
+                        log.warn(
+                                "Told channel with id={} to re-authenticate because it is still using an expired credential that we are going to purge (principal={}, expiration={}); this should generally not happen",
+                                channel.id(), credential.principalName(), new Date(credential.expireTimeMs()));
+                    }
                 }
             }
             for (ExpiringCredential credential : purgedCredentials)
@@ -545,6 +577,9 @@ public class ClientChannelCredentialTracker {
         private Supplier<String> recordAuthenticationEvent(ExpiringCredential credential, KafkaChannel channel,
                 long whenMs, Supplier<String> logMsgSupplierForImmediateReauthentication,
                 Supplier<String> logMsgSupplierForAuthenticationWithAnActiveCredential) {
+            /*
+             * Checks to make sure the channel is ready should already be done at this point
+             */
             ChannelState newChannelState = new ChannelState(credential);
             int channelsBeginSize = channelStates.size();
             ChannelState alreadyRecordedChannelState = channelStates.put(channel, newChannelState);
@@ -625,11 +660,17 @@ public class ClientChannelCredentialTracker {
         }
 
         private void initiateReauthentication(KafkaChannel channel, long whenMs) {
+            /*
+             * Checks to make sure the channel is ready should already be done at this point
+             */
             if (time.milliseconds() >= whenMs)
                 // initiate now to keep the queue empty if possible
                 channel.initiateReauthentication(time);
             else
-                // schedule it for the given future time
+                /*
+                 * Schedule it for the given future time. Note that a channel-ready check will
+                 * have to be done again later.
+                 */
                 outgoingScheduledEventQueue.add(new ChannelReauthenticationEvent(channel, whenMs));
         }
     }
@@ -668,9 +709,18 @@ public class ClientChannelCredentialTracker {
                     ChannelReauthenticationEvent nextScheduledEvent = outgoingScheduledEventQueue.poll(Long.MAX_VALUE,
                             TimeUnit.NANOSECONDS);
                     long now = time.milliseconds();
-                    if (nextScheduledEvent.onOrAfter() <= now)
-                        nextScheduledEvent.channel().initiateReauthentication(time);
-                    else {
+                    if (nextScheduledEvent.onOrAfter() <= now) {
+                        /*
+                         * Check to make sure the channel has not been closed
+                         */
+                        KafkaChannel channel = nextScheduledEvent.channel();
+                        if (!channel.ready())
+                            log.info(
+                                    "Ignoring re-authentication event scheduled for {} for not-ready channel (it must have been closed): {}",
+                                    new Date(nextScheduledEvent.onOrAfter()), channel);
+                        else
+                            channel.initiateReauthentication(time);
+                    } else {
                         // put it back in the priority queue and sleep a bit
                         outgoingScheduledEventQueue.add(nextScheduledEvent);
                         Thread.sleep(Math.max(nextScheduledEvent.onOrAfter() - now,
@@ -679,8 +729,8 @@ public class ClientChannelCredentialTracker {
                 } catch (InterruptedException e) {
                     // exit the thread
                     log.info(
-                            "Channel credential manager thread interrupted; exiting with current incoming event queue size = {}",
-                            incomingEventQueue.size());
+                            "Client channel credential manager outgoing scheduled event thread interrupted; exiting with current outgoing event queue size = {}",
+                            outgoingScheduledEventQueue.size());
                     return;
                 } catch (Exception e) {
                     // log the exception but keep the thread alive

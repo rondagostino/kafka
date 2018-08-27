@@ -516,8 +516,12 @@ public class ClientChannelCredentialTracker {
                     purgedCredentials.add(credential);
                 }
             }
-            if (purgedCredentials.isEmpty())
+            if (purgedCredentials.isEmpty()) {
+                log.info("No expired credentials purged; current size remains {}", credentialsBeginSize);
                 return;
+            }
+            log.info("Will purge {} expired credentials; current size prior to purge is {}", purgedCredentials.size(),
+                    credentialsBeginSize);
             /*
              * Tell any channel still authenticated with a purged credential to
              * re-authenticate. This should never happen in general, but we do it just to be
@@ -529,10 +533,12 @@ public class ClientChannelCredentialTracker {
                     KafkaChannel channel = entry.getKey();
                     initiateReauthentication(channel, now);
                     log.warn(
-                            "Told channel with id={} to re-authenticate because it is still using an expired credential (principal={}, expiration={}); this should generally not happen",
+                            "Told channel with id={} to re-authenticate because it is still using an expired credential that we are going to purge (principal={}, expiration={}); this should generally not happen",
                             channel.id(), credential.principalName(), new Date(credential.expireTimeMs()));
                 }
             }
+            for (ExpiringCredential credential : purgedCredentials)
+                credentialStates.remove(credential);
             int credentialsEndSize = credentialStates.size();
             logNumberOfTrackedCredentials(credentialsBeginSize, credentialsEndSize);
         }

@@ -130,13 +130,8 @@ public class KafkaChannel {
     }
 
     public void close() throws IOException {
-        if (!disconnected && clientExpiringCredential() != null) {
-            ClientChannelCredentialTracker clientChannelCredentialTracker = clientChannelCredentialTracker();
-            if (clientChannelCredentialTracker != null)
-                clientChannelCredentialTracker.offer(ClientChannelCredentialEvent.channelDisconnected(time, this));
-        }
-        this.disconnected = true;
-        Utils.closeAll(transportLayer, authenticatedAuthenticator, notYetAuthenticatedAuthenticator, receive);
+        disconnect();
+        Utils.closeAll(transportLayer, receive);
     }
 
     /**
@@ -199,6 +194,11 @@ public class KafkaChannel {
      */
     public SaslHandshakeResponse respondToReauthenticationSaslHandshakeRequest(RequestHeader requestHeader,
             SaslHandshakeRequest saslHandshakeRequest) {
+        /*
+         * Reject this request if we are already re-authenticating
+         */
+        if (notYetAuthenticatedAuthenticator != null)
+            throw new IllegalStateException(String.format("Channel already re-authenticating: %s: %s", this, notYetAuthenticatedAuthenticator));
         if (!ready()) {
             log.debug("Illegal state: client tried to re-authenticate when the connection is not ready");
             return new SaslHandshakeResponse(Errors.ILLEGAL_SASL_STATE, Collections.emptySet());
@@ -217,8 +217,7 @@ public class KafkaChannel {
             return new SaslHandshakeResponse(Errors.INVALID_REQUEST,
                     new HashSet<>(Arrays.asList(originalSaslMechanism)));
         }
-        if (notYetAuthenticatedAuthenticator == null)
-            notYetAuthenticatedAuthenticator = authenticatorSupplier.get();
+        notYetAuthenticatedAuthenticator = authenticatorSupplier.get();
         if (!(notYetAuthenticatedAuthenticator instanceof SaslServerAuthenticator)) {
             // should never happen
             String errMsg = "notYetAuthenticatedAuthenticator of incorrect type: "
@@ -233,19 +232,19 @@ public class KafkaChannel {
             SaslServerAuthenticator notYetAuthenticatedSaslServerAuthenticator = (SaslServerAuthenticator) notYetAuthenticatedAuthenticator;
             SaslHandshakeResponse retvalSaslHandshakeResponse = notYetAuthenticatedSaslServerAuthenticator
                     .respondToReauthenticationSaslHandshakeRequest(requestHeader, saslHandshakeRequest);
-            if (retvalSaslHandshakeResponse != null) {
-                if (notYetAuthenticatedSaslServerAuthenticator.failed()) {
-                    Utils.closeQuietly(notYetAuthenticatedAuthenticator,
-                            "notYetAuthenticatedAuthenticator in failed state");
-                    notYetAuthenticatedAuthenticator = null;
-                }
-                return retvalSaslHandshakeResponse;
+            if (retvalSaslHandshakeResponse == null) {
+                // should never happen
+                log.error("notYetAuthenticatedAuthenticator returned null handshake response");
+                Utils.closeQuietly(notYetAuthenticatedAuthenticator, "notYetAuthenticatedAuthenticator");
+                notYetAuthenticatedAuthenticator = null;
+                return new SaslHandshakeResponse(Errors.UNKNOWN_SERVER_ERROR, Collections.emptySet());
             }
-            // should never happen
-            log.error("notYetAuthenticatedAuthenticator returned null handshake response");
-            Utils.closeQuietly(notYetAuthenticatedAuthenticator, "notYetAuthenticatedAuthenticator");
-            notYetAuthenticatedAuthenticator = null;
-            return new SaslHandshakeResponse(Errors.UNKNOWN_SERVER_ERROR, Collections.emptySet());
+            if (notYetAuthenticatedSaslServerAuthenticator.failed()) {
+                Utils.closeQuietly(notYetAuthenticatedAuthenticator,
+                        "notYetAuthenticatedAuthenticator in failed state");
+                notYetAuthenticatedAuthenticator = null;
+            }
+            return retvalSaslHandshakeResponse;
         } catch (Exception e) {
             // deal with IOException or unexpected RuntimeException
             log.error(e.getMessage(), e);
@@ -268,21 +267,26 @@ public class KafkaChannel {
      */
     public SaslAuthenticateResponse respondToReauthenticationSaslAuthenticateRequest(RequestHeader requestHeader,
             SaslAuthenticateRequest saslAuthenticateRequest) {
+        /*
+         * Reject this request if we are not re-authenticating
+         */
+        if (notYetAuthenticatedAuthenticator == null)
+            throw new IllegalStateException(String
+                    .format("Invalid request; client tried to re-authenticate without an initial handshake: %s", this));
         if (!ready()) {
-            log.debug("Illegal state: client tried to re-authenticate when the connection was not ready");
-            return new SaslAuthenticateResponse(Errors.ILLEGAL_SASL_STATE,
-                    "Cannot re-authenticate: not yet ready/authenticated");
+            String errMsg = "Illegal state: client tried to re-authenticate when the connection was not ready";
+            log.debug(errMsg);
+            Utils.closeQuietly(notYetAuthenticatedAuthenticator, "notYetAuthenticatedAuthenticator");
+            notYetAuthenticatedAuthenticator = null;
+            return new SaslAuthenticateResponse(Errors.ILLEGAL_SASL_STATE, errMsg);
         }
         if (!(authenticatedAuthenticator instanceof SaslServerAuthenticator)) {
             log.debug("Invalid request: client tried to re-authenticate to a non-SASL authenticator: {}",
                     authenticatedAuthenticator.getClass().getName());
+            Utils.closeQuietly(notYetAuthenticatedAuthenticator, "notYetAuthenticatedAuthenticator");
+            notYetAuthenticatedAuthenticator = null;
             return new SaslAuthenticateResponse(Errors.INVALID_REQUEST,
                     "Only SASL-enabled broker listeners can respond to re-authentication requests");
-        }
-        if (notYetAuthenticatedAuthenticator == null) {
-            log.debug("Invalid request: client tried to re-authenticate without an initial handshake");
-            return new SaslAuthenticateResponse(Errors.INVALID_REQUEST,
-                    "Must provide a handshake request to start re-authentication");
         }
         try {
             SaslServerAuthenticator notYetAuthenticatedSaslServerAuthenticator = (SaslServerAuthenticator) notYetAuthenticatedAuthenticator;
@@ -301,13 +305,10 @@ public class KafkaChannel {
              * failed, or still in progress.
              */
             if (notYetAuthenticatedAuthenticator.complete()) {
-                if (!authenticatedAuthenticator.principal().getPrincipalType()
-                        .equals(notYetAuthenticatedAuthenticator.principal().getPrincipalType())
-                        || !authenticatedAuthenticator.principal().getName()
-                                .equals(notYetAuthenticatedAuthenticator.principal().getName())) {
+                if (changedPrincipal()) {
                     // disallow changing identities upon re-authentication
                     String errMsg = String.format(
-                            "Not allowed to change identities during re-authentication from %s:%s: %s:%s",
+                            "Not allowed to change identities during re-authentication from %s:%s to %s:%s",
                             authenticatedAuthenticator.principal().getPrincipalType(),
                             authenticatedAuthenticator.principal().getName(),
                             notYetAuthenticatedAuthenticator.principal().getPrincipalType(),
@@ -334,13 +335,17 @@ public class KafkaChannel {
 
     public void disconnect() {
         if (!disconnected) {
+            disconnected = true;
+            Utils.closeQuietly(authenticatedAuthenticator, "authenticatedAuthenticator");
+            authenticatedAuthenticator = null;
+            Utils.closeQuietly(notYetAuthenticatedAuthenticator, "notYetAuthenticatedAuthenticator");
+            notYetAuthenticatedAuthenticator = null;
             if (clientExpiringCredential() != null) {
                 ClientChannelCredentialTracker clientChannelCredentialTracker = clientChannelCredentialTracker();
                 if (clientChannelCredentialTracker != null)
                     clientChannelCredentialTracker.offer(ClientChannelCredentialEvent.channelDisconnected(time, this));
             }
         }
-        disconnected = true;
         transportLayer.disconnect();
     }
 
@@ -459,7 +464,7 @@ public class KafkaChannel {
     }
 
     public boolean ready() {
-        return transportLayer.ready() && authenticatedAuthenticator != null;
+        return authenticatedAuthenticator != null & transportLayer.ready();
     }
 
     public boolean hasSend() {
@@ -540,6 +545,13 @@ public class KafkaChannel {
         return super.toString() + " id=" + id;
     }
 
+    private boolean changedPrincipal() {
+        return !authenticatedAuthenticator.principal().getPrincipalType()
+                .equals(notYetAuthenticatedAuthenticator.principal().getPrincipalType())
+                || !authenticatedAuthenticator.principal().getName()
+                        .equals(notYetAuthenticatedAuthenticator.principal().getName());
+    }
+
     private ExpiringCredential clientExpiringCredential() {
         return authenticatedAuthenticator instanceof SaslClientAuthenticator
                 ? ((SaslClientAuthenticator) authenticatedAuthenticator).expiringCredential()
@@ -592,17 +604,22 @@ public class KafkaChannel {
     }
 
     /**
-     * Initiate a re-authentication of this channel. This method must enqueue the
-     * initial request in the re-authentication dance and return immediately while
-     * ensuring that the ultimate success or failure of the re-authentication is
-     * reported back via the {@link ClientChannelCredentialTracker} instance
-     * available in the private credentials of the {@code Subject} associated with
-     * the SASL mechanism.
+     * Initiate a re-authentication of this channel. This method is called on the
+     * client side and must enqueue the initial request in the re-authentication
+     * dance and return immediately while ensuring that the ultimate success or
+     * failure of the re-authentication is reported back via the
+     * {@link ClientChannelCredentialTracker} instance available in the private
+     * credentials of the {@code Subject} associated with the SASL mechanism.
      * 
      * @param time
      *            the require {@link Time}
      */
     public void initiateReauthentication(Time time) {
+        /*
+         * Reject this request if we are already re-authenticating
+         */
+        if (notYetAuthenticatedAuthenticator != null)
+            throw new IllegalStateException(String.format("Channel already re-authenticating: %s: %s", this, this.notYetAuthenticatedAuthenticator));
         /*
          * We must have a client channel/credential tracker since that is where this
          * request originates from and that is who we need to notify after the
@@ -645,9 +662,6 @@ public class KafkaChannel {
          * channel's state based on the ultimate success or failure of the
          * re-authentication attempt.
          */
-        if (notYetAuthenticatedAuthenticator != null)
-            failReauthenticationDoNotRetry(clientChannelCredentialTracker,
-                    "Channel seems to already be re-authenticating (should nver happen)");
         notYetAuthenticatedAuthenticator = authenticatorSupplier.get();
         if (!(notYetAuthenticatedAuthenticator instanceof SaslClientAuthenticator)) {
             // should never happen; don't retry
@@ -682,7 +696,7 @@ public class KafkaChannel {
                         if (notYetAuthenticatedSaslClientAuthenticator.complete() && expiringCredential != null) {
                             /*
                              * Re-authentication succeeded on the SASL client side, and internal state makes
-                             * sense.
+                             * sense/is consistent with success.
                              */
                             clientChannelCredentialTracker.offer(ClientChannelCredentialEvent
                                     .channelReauthenticated(time, KafkaChannel.this, expiringCredential));

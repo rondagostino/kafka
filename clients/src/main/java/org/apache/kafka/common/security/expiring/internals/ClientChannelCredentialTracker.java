@@ -517,10 +517,10 @@ public class ClientChannelCredentialTracker {
                 }
             }
             if (purgedCredentials.isEmpty()) {
-                log.info("No expired credentials purged; current size remains {}", credentialsBeginSize);
+                log.info("No expired credentials purged.  Number of tracked credentials remains {}", credentialsBeginSize);
                 return;
             }
-            log.info("Will purge {} expired credentials; current size prior to purge is {}", purgedCredentials.size(),
+            log.info("Will purge {} expired credentials.  Number of tracked credentials prior to purge is {}", purgedCredentials.size(),
                     credentialsBeginSize);
             /*
              * Tell any channel still authenticated with a purged credential to

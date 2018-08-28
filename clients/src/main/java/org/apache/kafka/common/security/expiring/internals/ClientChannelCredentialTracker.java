@@ -497,10 +497,10 @@ public class ClientChannelCredentialTracker {
         private boolean retry(ChannelState channelState, long whenMs, RetryIndication retryIndication) {
             if (retryIndication == RetryIndication.DO_NOT_RETRY)
                 return false;
-            if (retryIndication == RetryIndication.RETRY_UNLIMITED)
+            if (retryIndication == RetryIndication.RETRY_LIMITED)
                 return true;
-            // continue to retry as long as the existing credential is active
-            return whenMs < channelState.credential().expireTimeMs();
+            // continue to retry at least while the existing credential is active
+            return whenMs <= channelState.credential().expireTimeMs();
         }
 
         private void handleChannelDisconnectedEvent(ClientChannelCredentialEvent event) {

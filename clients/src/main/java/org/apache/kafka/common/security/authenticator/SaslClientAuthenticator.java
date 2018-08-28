@@ -473,7 +473,7 @@ public class SaslClientAuthenticator implements Authenticator {
                      */
                     if (saslState != SaslState.CLOSED)
                         saslState = SaslState.FAILED;
-                    authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_UNLIMITED,
+                    authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
                             String.format("Unexpected exception, will retry: %s", e.getMessage()));
                 }
             }
@@ -528,7 +528,7 @@ public class SaslClientAuthenticator implements Authenticator {
                         clientToken = createSaslToken(new byte[0], true);
                     } catch (SaslException e) {
                         saslState = SaslState.FAILED;
-                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_UNLIMITED,
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
                                 String.format("Unexpected error creating initial client SASL token, will retry: %s",
                                         e.getMessage()));
                         return;
@@ -614,7 +614,7 @@ public class SaslClientAuthenticator implements Authenticator {
                         clientToken = createSaslToken(serverToken, false);
                     } catch (SaslException e) {
                         saslState = SaslState.FAILED;
-                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_UNLIMITED,
+                        authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.RETRY_LIMITED,
                                 String.format("Unexpected error responding to server's SASL token, will retry: %s",
                                         e.getMessage()));
                         return;

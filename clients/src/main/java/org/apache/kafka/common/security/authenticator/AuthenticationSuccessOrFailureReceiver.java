@@ -25,11 +25,7 @@ public interface AuthenticationSuccessOrFailureReceiver {
      */
     public enum RetryIndication {
         /**
-         * Retry regardless of the number of times re-authentication has failed
-         */
-        RETRY_UNLIMITED,
-        /**
-         * Retry if we haven't already retried a few times
+         * Retry at least as long as the current credential remains valid
          */
         RETRY_LIMITED,
         /**

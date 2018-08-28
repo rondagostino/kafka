@@ -23,6 +23,9 @@ import org.apache.kafka.clients._
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.network._
 import org.apache.kafka.common.requests.AbstractRequest
+import org.apache.kafka.common.security.authenticator.AuthenticationRequest;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
+import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.security.JaasContext
 import org.apache.kafka.common.utils.{LogContext, Time}
 import org.apache.kafka.clients.{ApiVersions, ClientResponse, ManualMetadataUpdater, NetworkClient}
@@ -35,6 +38,8 @@ trait BlockingSend {
 
   def sendRequest(requestBuilder: AbstractRequest.Builder[_ <: AbstractRequest]): ClientResponse
 
+  def sendRequest(requestBuilder: AbstractRequest.Builder[_ <: AbstractRequest], authenticationRequestCompletionHandler: AuthenticationRequestCompletionHandler): Unit
+
   def close()
 }
 
@@ -44,7 +49,8 @@ class ReplicaFetcherBlockingSend(sourceBroker: BrokerEndPoint,
                                  time: Time,
                                  fetcherId: Int,
                                  clientId: String,
-                                 logContext: LogContext) extends BlockingSend {
+                                 logContext: LogContext,
+                                 authenticationRequestEnqueuer : AuthenticationRequestEnqueuer) extends BlockingSend {
 
   private val sourceNode = new Node(sourceBroker.id, sourceBroker.host, sourceBroker.port)
   private val socketTimeout: Int = brokerConfig.replicaSocketTimeoutMs
@@ -58,6 +64,10 @@ class ReplicaFetcherBlockingSend(sourceBroker: BrokerEndPoint,
       brokerConfig.saslMechanismInterBrokerProtocol,
       brokerConfig.saslInterBrokerHandshakeRequestEnable
     )
+    
+    if (channelBuilder.isInstanceOf[SaslChannelBuilder])
+      channelBuilder.asInstanceOf[SaslChannelBuilder].authenticationRequestEnqueuer(authenticationRequestEnqueuer)
+
     val selector = new Selector(
       NetworkReceive.UNLIMITED,
       brokerConfig.connectionsMaxIdleMs,
@@ -100,6 +110,29 @@ class ReplicaFetcherBlockingSend(sourceBroker: BrokerEndPoint,
       case e: Throwable =>
         networkClient.close(sourceBroker.id.toString)
         throw e
+    }
+  }
+
+  override def sendRequest(requestBuilder: Builder[_ <: AbstractRequest], authenticationRequestCompletionHandler: AuthenticationRequestCompletionHandler): Unit = {
+    try {
+      if (!NetworkClientUtils.awaitReady(networkClient, sourceNode, time, socketTimeout))
+        throw new SocketTimeoutException(s"Failed to connect within $socketTimeout ms")
+      val now = time.milliseconds
+      val clientRequest = networkClient.newClientRequest(sourceBroker.id.toString, requestBuilder, now, true, authenticationRequestCompletionHandler)
+      networkClient.send(clientRequest, now)
+      var clientResponse: ClientResponse = null
+      while (clientResponse == null) {
+        val responses = networkClient.poll(Long.MaxValue, time.milliseconds()).asScala
+        for (response <- responses if response.requestHeader().correlationId() == clientRequest.correlationId())
+          clientResponse = response
+      }
+    }
+    catch {
+      case e: Throwable =>
+        /* 
+         * Don't close the channel or throw the exception; just send notification of the failure
+         */
+        authenticationRequestCompletionHandler.onException(new RuntimeException(e.getMessage, e))
     }
   }
 

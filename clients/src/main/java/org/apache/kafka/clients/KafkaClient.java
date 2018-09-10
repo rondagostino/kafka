@@ -27,6 +27,71 @@ import java.util.List;
  * The interface for {@link NetworkClient}
  */
 public interface KafkaClient extends Closeable {
+    /**
+     * Return true if any node has a re-authentication request either enqueued and
+     * waiting to be sent or already in-flight. A call to {@link #poll(long, long)}
+     * is required to send and receive/process the results of such requests. <b>An
+     * owner of this instance that does not implement a run loop to repeatedly call
+     * {@link #poll(long, long)} but instead only sends requests synchronously
+     * on-demand to a single node must call this method periodically -- and invoke
+     * {@link #poll(long, long)} if the return value is {@code true} -- to ensure
+     * that any re-authentication requests that have been injected are sent and
+     * processed in a timely fashion.</b>
+     * <p>
+     * Example code to re-authenticate a connection across several
+     * requests/responses is as follows:
+     * 
+     * <pre>
+     * // Send multiple requests related to re-authentication in the synchronous
+     * // use case, completing the re-authentication exchange.
+     * while (kafkaClient.hasReauthenticationRequest())
+     *     // Returns an empty list in synchronous use case.
+     *     kafkaClient.poll(Long.MAX_VALUE, time.milliseconds());
+     * // The connection is ready for use, and if there originally was a
+     * // re-authentication request then as many requests as required to
+     * // complete the exchange have been sent.
+     * </pre>
+     * 
+     * Alternatively, to only send one re-authentication request and receive its
+     * response (which allows us to interleave other requests to the single node to
+     * which we are connected before subsequent requests related to the multi-step
+     * re-authentication exchange are sent):
+     * 
+     * <pre>
+     * // Send a single request related to re-authentication in the synchronous
+     * // use case, potentially (but not necessarily) completing the
+     * // re-authentication exchange.
+     * while (kafkaClient.hasReauthenticationRequest()) {
+     *     // Returns an empty list in synchronous use case.
+     *     kafkaClient.poll(Long.MAX_VALUE, time.milliseconds());
+     *     if (!kafkaClient.hasInFlightRequests())
+     *         break; // Response has been received.
+     * }
+     * // The connection is ready for use, and if there was a
+     * // re-authentication request then either the exchange is finished or
+     * // there is another re-authentication request available to be sent.
+     * </pre>
+     * 
+     * @return if any node has a re-authentication request either enqueued and
+     *         waiting to be sent or already in-flight
+     * @see #enqueueAuthenticationRequest(ClientRequest)
+     */
+    default boolean hasReauthenticationRequest() {
+        return false;
+    }
+
+    /**
+     * Enqueue the given request related to re-authenticating a connection. This
+     * method is guaranteed to be thread-safe even if the class implementing this
+     * interface is generally not.
+     * 
+     * @param clientRequest
+     *            the request to enqueue
+     * @see #hasReauthenticationRequest()
+     */
+    default void enqueueAuthenticationRequest(ClientRequest clientRequest) {
+        // empty
+    }
 
     /**
      * Check if we are currently ready to send another request to the given node but don't attempt to connect if we

@@ -18,12 +18,11 @@ package kafka.server.epoch.util
 
 import kafka.cluster.BrokerEndPoint
 import kafka.server.BlockingSend
-import org.apache.kafka.clients.{ClientRequest, ClientResponse, MockClient, RequestCompletionHandler}
+import org.apache.kafka.clients.{ClientRequest, ClientResponse, MockClient}
 import org.apache.kafka.common.protocol.{ApiKeys, Errors}
 import org.apache.kafka.common.record.Records
 import org.apache.kafka.common.requests.AbstractRequest.Builder
 import org.apache.kafka.common.requests.{AbstractRequest, EpochEndOffset, FetchResponse, OffsetsForLeaderEpochResponse, FetchMetadata => JFetchMetadata}
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
 import org.apache.kafka.common.utils.{SystemTime, Time}
 import org.apache.kafka.common.{Node, TopicPartition}
 
@@ -77,11 +76,8 @@ class ReplicaFetcherMockBlockingSend(offsets: java.util.Map[TopicPartition, Epoc
     //Use mock client to create the appropriate response object
     client.respondFrom(response, new Node(destination.id, destination.host, destination.port))
     client.poll(30, time.milliseconds()).iterator().next()
-}
-  
-  override def sendRequest(requestBuilder: Builder[_ <: AbstractRequest], authenticationRequestCompletionHandler: AuthenticationRequestCompletionHandler): Unit =
-    throw new RuntimeException()
-  
+  }
+
   private def request(requestBuilder: Builder[_ <: AbstractRequest]): ClientRequest = {
     client.newClientRequest(
       destination.id.toString,
@@ -91,4 +87,6 @@ class ReplicaFetcherMockBlockingSend(offsets: java.util.Map[TopicPartition, Epoc
   }
 
   override def close(): Unit = {}
+
+  override def maybeReauthenticate(): Unit = {}
 }

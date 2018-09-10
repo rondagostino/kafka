@@ -33,9 +33,6 @@ import org.apache.kafka.common.requests.UpdateMetadataRequest.EndPoint
 import org.apache.kafka.common.requests._
 import org.apache.kafka.common.security.JaasContext
 import org.apache.kafka.common.security.auth.SecurityProtocol
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler
-import org.apache.kafka.common.security.authenticator.AuthenticationRequest
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer
 import org.apache.kafka.common.utils.{LogContext, Time}
 import org.apache.kafka.common.{KafkaException, Node, TopicPartition}
 
@@ -80,12 +77,12 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
   }
 
   def sendRequest(brokerId: Int, apiKey: ApiKeys, request: AbstractRequest.Builder[_ <: AbstractRequest],
-                  callback: AbstractResponse => Unit = null, requestCompletionHandler : RequestCompletionHandler = null) {
+                  callback: AbstractResponse => Unit = null) {
     brokerLock synchronized {
       val stateInfoOpt = brokerStateInfo.get(brokerId)
       stateInfoOpt match {
         case Some(stateInfo) =>
-          stateInfo.messageQueue.put(QueueItem(apiKey, request, callback, requestCompletionHandler, time.milliseconds()))
+          stateInfo.messageQueue.put(QueueItem(apiKey, request, callback, time.milliseconds()))
         case None =>
           warn(s"Not sending request $request to broker $brokerId, since it is offline.")
       }
@@ -114,21 +111,16 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
     val brokerNode = broker.node(config.interBrokerListenerName)
     val logContext = new LogContext(s"[Controller id=${config.brokerId}, targetBrokerId=${brokerNode.idString}] ")
     val networkClient = {
+      val kafkaClientSupplier = new ClientUtils.KafkaClientSupplier()
       val channelBuilder = ChannelBuilders.clientChannelBuilder(
         config.interBrokerSecurityProtocol,
         JaasContext.Type.SERVER,
         config,
         config.interBrokerListenerName,
         config.saslMechanismInterBrokerProtocol,
-        config.saslInterBrokerHandshakeRequestEnable
+        config.saslInterBrokerHandshakeRequestEnable,
+        kafkaClientSupplier
       )
-      if (channelBuilder.isInstanceOf[SaslChannelBuilder])
-        channelBuilder.asInstanceOf[SaslChannelBuilder].authenticationRequestEnqueuer(
-          new AuthenticationRequestEnqueuer() {
-            def enqueueRequest(authenticationRequest: AuthenticationRequest): Unit =
-                sendRequest(authenticationRequest.nodeId(), authenticationRequest.requestBuilder().apiKey(),
-                    authenticationRequest.requestBuilder(), null, authenticationRequest.authenticationRequestCompletionHandler())
-          })
       val selector = new Selector(
         NetworkReceive.UNLIMITED,
         Selector.NO_IDLE_TIMEOUT_MS,
@@ -140,7 +132,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
         channelBuilder,
         logContext
       )
-      new NetworkClient(
+      val retvalNetworkClient = new NetworkClient(
         selector,
         new ManualMetadataUpdater(Seq(brokerNode).asJava),
         config.brokerId.toString,
@@ -155,6 +147,8 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
         new ApiVersions,
         logContext
       )
+      kafkaClientSupplier.kafkaClient(retvalNetworkClient)
+      retvalNetworkClient
     }
     val threadName = threadNamePrefix match {
       case None => s"Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
@@ -208,7 +202,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
 }
 
 case class QueueItem(apiKey: ApiKeys, request: AbstractRequest.Builder[_ <: AbstractRequest],
-                     callback: AbstractResponse => Unit, requestCompletionHandler : RequestCompletionHandler, enqueueTimeMs: Long)
+                     callback: AbstractResponse => Unit, enqueueTimeMs: Long)
 
 class RequestSendThread(val controllerId: Int,
                         val controllerContext: ControllerContext,
@@ -230,68 +224,49 @@ class RequestSendThread(val controllerId: Int,
 
     def backoff(): Unit = pause(100, TimeUnit.MILLISECONDS)
 
-    val QueueItem(apiKey, requestBuilder, callback, requestCompletionHandler, enqueueTimeMs) = queue.take()
+    val obj = queue.poll(1, TimeUnit.SECONDS)
+    if (obj == null) {
+      // check to see if we need to re-authenticate
+      while (networkClient.hasReauthenticationRequest())
+        networkClient.poll(Long.MaxValue, time.milliseconds());
+      return;
+    }
+    val QueueItem(apiKey, requestBuilder, callback, enqueueTimeMs) = obj
+    
     requestRateAndQueueTimeMetrics.update(time.milliseconds() - enqueueTimeMs, TimeUnit.MILLISECONDS)
-    val api = requestBuilder.apiKey() 
-    val isNonStandardRequest = api != ApiKeys.LEADER_AND_ISR && api != ApiKeys.STOP_REPLICA && api != ApiKeys.UPDATE_METADATA
-    val isReauthenticationRequest = isNonStandardRequest && callback == null && requestCompletionHandler != null &&
-      (api == ApiKeys.API_VERSIONS || api == ApiKeys.SASL_HANDSHAKE || api == ApiKeys.SASL_AUTHENTICATE)
 
     var clientResponse: ClientResponse = null
     try {
       var isSendSuccessful = false
-      var isSendIgnoredDueToBrokerNotReady = false
-      while (isRunning && !isSendSuccessful && !isSendIgnoredDueToBrokerNotReady) {
+      while (isRunning && !isSendSuccessful) {
         // if a broker goes down for a long time, then at some point the controller's zookeeper listener will trigger a
         // removeBroker which will invoke shutdown() on this thread. At that point, we will stop retrying.
         try {
-          clientResponse = null
           if (!brokerReady()) {
-            // ignore any request related to re-authentication since the broker is down
-            isSendIgnoredDueToBrokerNotReady = isReauthenticationRequest
-            if (!isSendIgnoredDueToBrokerNotReady)
-              // otherwise wait a bit before trying again
-              backoff()
+            isSendSuccessful = false
+            backoff()
           }
           else {
-            if (isReauthenticationRequest) {
-              /*
-               * Let NetworkClient invoke the callback handler.  Use the default timeout value.
-               */
-              val now = time.milliseconds()
-              val clientRequest = networkClient.newClientRequest(brokerNode.idString, requestBuilder, now, true, requestCompletionHandler)
-              networkClient.send(clientRequest, now)
-              while (clientResponse == null) {
-                val responses = networkClient.poll(Long.MaxValue, time.milliseconds()).asScala
-                for (response <- responses if response.requestHeader().correlationId() == clientRequest.correlationId())
-                  clientResponse = response
-              }
-              isSendSuccessful = true // exit loop since we received the response
-            }
-            else { // !isReauthenticationRequest
-              val clientRequest =
-                networkClient.newClientRequest(brokerNode.idString, requestBuilder, time.milliseconds(), true)
-              clientResponse = NetworkClientUtils.sendAndReceive(networkClient, clientRequest, time)
-              isSendSuccessful = true // exit loop since we received the response
-            }
+            val clientRequest = networkClient.newClientRequest(brokerNode.idString, requestBuilder,
+              time.milliseconds(), true)
+            clientResponse = NetworkClientUtils.sendAndReceive(networkClient, clientRequest, time)
+            isSendSuccessful = true
           }
         } catch {
           case e: Throwable => // if the send was not successful, reconnect to broker and resend the message
             warn(s"Controller $controllerId epoch ${controllerContext.epoch} fails to send request $requestBuilder " +
               s"to broker $brokerNode. Reconnecting to broker.", e)
             networkClient.close(brokerNode.idString)
-            // resend only if it was't related to re-authentication
-            if (isReauthenticationRequest)
-              isSendIgnoredDueToBrokerNotReady = true
-            else
-              backoff()
+            isSendSuccessful = false
+            backoff()
         }
       }
       if (clientResponse != null) {
         val requestHeader = clientResponse.requestHeader
-        if (isNonStandardRequest && !isReauthenticationRequest)
-            throw new KafkaException(s"Unexpected apiKey received: $apiKey")
-        
+        val api = requestHeader.apiKey
+        if (api != ApiKeys.LEADER_AND_ISR && api != ApiKeys.STOP_REPLICA && api != ApiKeys.UPDATE_METADATA)
+          throw new KafkaException(s"Unexpected apiKey received: $apiKey")
+
         val response = clientResponse.responseBody
 
         stateChangeLogger.withControllerEpoch(controllerContext.epoch).trace(s"Received response " +

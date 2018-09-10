@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.common.network;
 
+import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.common.Configurable;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.internals.BrokerSecurityConfigs;
@@ -33,6 +34,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 public class ChannelBuilders {
 
@@ -55,7 +57,29 @@ public class ChannelBuilders {
             ListenerName listenerName,
             String clientSaslMechanism,
             boolean saslHandshakeRequestEnable) {
+        return clientChannelBuilder(securityProtocol, contextType, config, listenerName, clientSaslMechanism,
+                saslHandshakeRequestEnable, null);
+    }
 
+    /**
+     * @param securityProtocol the securityProtocol
+     * @param contextType the contextType, it must be non-null if `securityProtocol` is SASL_*; it is ignored otherwise
+     * @param config client config
+     * @param listenerName the listenerName if contextType is SERVER or null otherwise
+     * @param clientSaslMechanism SASL mechanism if mode is CLIENT, ignored otherwise
+     * @param saslHandshakeRequestEnable flag to enable Sasl handshake requests; disabled only for SASL
+     *             inter-broker connections with inter-broker protocol version < 0.10
+     * @param kafkaClientSupplier provides access to the KafkaClient for re-authentication
+     * @return the configured `ChannelBuilder`
+     * @throws IllegalArgumentException if `mode` invariants described above is not maintained
+     */
+    public static ChannelBuilder clientChannelBuilder(SecurityProtocol securityProtocol,
+            JaasContext.Type contextType,
+            AbstractConfig config,
+            ListenerName listenerName,
+            String clientSaslMechanism,
+            boolean saslHandshakeRequestEnable,
+            Supplier<KafkaClient> kafkaClientSupplier) {
         if (securityProtocol == SecurityProtocol.SASL_PLAINTEXT || securityProtocol == SecurityProtocol.SASL_SSL) {
             if (contextType == null)
                 throw new IllegalArgumentException("`contextType` must be non-null if `securityProtocol` is `" + securityProtocol + "`");
@@ -63,7 +87,7 @@ public class ChannelBuilders {
                 throw new IllegalArgumentException("`clientSaslMechanism` must be non-null in client mode if `securityProtocol` is `" + securityProtocol + "`");
         }
         return create(securityProtocol, Mode.CLIENT, contextType, config, listenerName, false, clientSaslMechanism,
-                saslHandshakeRequestEnable, null, null);
+                saslHandshakeRequestEnable, null, null, kafkaClientSupplier);
     }
 
     /**
@@ -78,9 +102,28 @@ public class ChannelBuilders {
                                                       SecurityProtocol securityProtocol,
                                                       AbstractConfig config,
                                                       CredentialCache credentialCache,
-                                                      DelegationTokenCache tokenCache) {
+            DelegationTokenCache tokenCache) {
+        return serverChannelBuilder(listenerName, isInterBrokerListener, securityProtocol, config, credentialCache,
+                tokenCache, null);
+    }
+
+    /**
+     * @param listenerName the listenerName
+     * @param securityProtocol the securityProtocol
+     * @param config server config
+     * @param credentialCache Credential cache for SASL/SCRAM if SCRAM is enabled
+     * @param kafkaClientSupplier provides access to the KafkaClient for re-authentication
+     * @return the configured `ChannelBuilder`
+     */
+    public static ChannelBuilder serverChannelBuilder(ListenerName listenerName,
+                                                      boolean isInterBrokerListener,
+                                                      SecurityProtocol securityProtocol,
+                                                      AbstractConfig config,
+                                                      CredentialCache credentialCache,
+                                                      DelegationTokenCache tokenCache,
+                                                      Supplier<KafkaClient> kafkaClientSupplier) {
         return create(securityProtocol, Mode.SERVER, JaasContext.Type.SERVER, config, listenerName,
-                isInterBrokerListener, null, true, credentialCache, tokenCache);
+                isInterBrokerListener, null, true, credentialCache, tokenCache, kafkaClientSupplier);
     }
 
     private static ChannelBuilder create(SecurityProtocol securityProtocol,
@@ -92,7 +135,8 @@ public class ChannelBuilders {
                                          String clientSaslMechanism,
                                          boolean saslHandshakeRequestEnable,
                                          CredentialCache credentialCache,
-                                         DelegationTokenCache tokenCache) {
+                                         DelegationTokenCache tokenCache,
+                                         Supplier<KafkaClient> kafkaClientSupplier) {
         Map<String, ?> configs;
         if (listenerName == null)
             configs = config.values();
@@ -128,7 +172,8 @@ public class ChannelBuilders {
                         clientSaslMechanism,
                         saslHandshakeRequestEnable,
                         credentialCache,
-                        tokenCache);
+                        tokenCache,
+                        kafkaClientSupplier);
                 break;
             case PLAINTEXT:
                 channelBuilder = new PlaintextChannelBuilder(listenerName);

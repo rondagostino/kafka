@@ -24,6 +24,7 @@ import org.apache.kafka.clients.ClientUtils;
 import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.clients.NetworkClient;
 import org.apache.kafka.clients.StaleMetadataException;
+import org.apache.kafka.clients.ClientUtils.KafkaClientSupplier;
 import org.apache.kafka.clients.admin.DeleteAclsResult.FilterResult;
 import org.apache.kafka.clients.admin.DeleteAclsResult.FilterResults;
 import org.apache.kafka.clients.admin.DescribeReplicaLogDirsResult.ReplicaLogDirInfo;
@@ -63,7 +64,6 @@ import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.MetricsReporter;
 import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.network.ChannelBuilder;
-import org.apache.kafka.common.network.SaslChannelBuilder;
 import org.apache.kafka.common.network.Selector;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.requests.AbstractRequest;
@@ -115,9 +115,6 @@ import org.apache.kafka.common.requests.OffsetFetchRequest;
 import org.apache.kafka.common.requests.OffsetFetchResponse;
 import org.apache.kafka.common.requests.RenewDelegationTokenRequest;
 import org.apache.kafka.common.requests.RenewDelegationTokenResponse;
-import org.apache.kafka.common.security.authenticator.AuthenticationRequest;
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestCompletionHandler;
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.security.token.delegation.DelegationToken;
 import org.apache.kafka.common.security.token.delegation.TokenInformation;
 import org.apache.kafka.common.utils.AppInfoParser;
@@ -349,7 +346,8 @@ public class KafkaAdminClient extends AdminClient {
             reporters.add(new JmxReporter(JMX_PREFIX));
             metrics = new Metrics(metricConfig, reporters, time);
             String metricGrpPrefix = "admin-client";
-            channelBuilder = ClientUtils.createChannelBuilder(config);
+            KafkaClientSupplier kafkaClientSupplier = new KafkaClientSupplier();
+            channelBuilder = ClientUtils.createChannelBuilder(config, kafkaClientSupplier);
             selector = new Selector(config.getLong(AdminClientConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG),
                     metrics, time, metricGrpPrefix, channelBuilder, logContext);
             networkClient = new NetworkClient(
@@ -366,27 +364,9 @@ public class KafkaAdminClient extends AdminClient {
                 true,
                 apiVersions,
                 logContext);
-            KafkaAdminClient retvalKafkaAdminClient = new KafkaAdminClient(config, clientId, time, metadataManager, metrics, networkClient,
+            kafkaClientSupplier.kafkaClient(networkClient);
+            return new KafkaAdminClient(config, clientId, time, metadataManager, metrics, networkClient,
                 timeoutProcessorFactory, logContext);
-            if (channelBuilder instanceof SaslChannelBuilder)
-                ((SaslChannelBuilder) channelBuilder)
-                        .authenticationRequestEnqueuer(new AuthenticationRequestEnqueuer() {
-                            @Override
-                            public void enqueueRequest(AuthenticationRequest authenticationRequest) {
-                                retvalKafkaAdminClient.runnable
-                                        .enqueue(retvalKafkaAdminClient.new ReauthenticationCall("re-authentication",
-                                                time.milliseconds() + retvalKafkaAdminClient.defaultTimeoutMs,
-                                                retvalKafkaAdminClient.new CoordinatorAwareConstantNodeProvider(
-                                                        authenticationRequest.nodeId()),
-                                                authenticationRequest.authenticationRequestCompletionHandler()) {
-                                            @Override
-                                            AbstractRequest.Builder<?> createRequest(int timeoutMs) {
-                                                return authenticationRequest.requestBuilder();
-                                            }
-                                        }, time.milliseconds());
-                            }
-                        });
-            return retvalKafkaAdminClient;
         } catch (Throwable exc) {
             closeQuietly(metrics, "Metrics");
             closeQuietly(networkClient, "NetworkClient");
@@ -509,7 +489,7 @@ public class KafkaAdminClient extends AdminClient {
     }
 
     private class ConstantNodeIdProvider implements NodeProvider {
-        protected final int nodeId;
+        private final int nodeId;
 
         ConstantNodeIdProvider(int nodeId) {
             this.nodeId = nodeId;
@@ -560,51 +540,7 @@ public class KafkaAdminClient extends AdminClient {
             return null;
         }
     }
-    
 
-    /**
-     * Provides the node identified by a specific nodeId, but is also
-     * coordinator-aware. The value (MAX_VALUE - originalNode.id) is used as the
-     * coordinator id to allow separate connections for the coordinator in the
-     * underlying network client layer, but there is no such Node in the metadata.
-     * We can deduce the Node that would appear in the metadata for the coordinator
-     * by starting with the Node that corresponds to the originalNode.id and then
-     * adjusting the id.
-     */
-    private class CoordinatorAwareConstantNodeProvider extends ConstantNodeIdProvider {
-        private final boolean potentiallyAdjustForCoordinator;
-
-        CoordinatorAwareConstantNodeProvider(int nodeId) {
-            this(nodeId, true);
-        }
-
-        private CoordinatorAwareConstantNodeProvider(int nodeId, boolean potentiallyAdjustForCoordinator) {
-            super(nodeId);
-            this.potentiallyAdjustForCoordinator = potentiallyAdjustForCoordinator;
-        }
-
-        @Override
-        public Node provide() {
-            Node node = super.provide();
-            /*
-             * The value (MAX_VALUE - originalNode.id) is used as the coordinator id to
-             * allow separate connections for the coordinator in the underlying network
-             * client layer, but there is no such Node in the metadata. We can deduce the
-             * Node that would appear in the metadata for the coordinator by starting with
-             * the Node that corresponds to the originalNode.id and then adjusting the id.
-             */
-            if (node != null || nodeId < 0 || !potentiallyAdjustForCoordinator)
-                // either we have it or we can't/were told not to adjust, so we're done
-                return node;
-            // try to adjust for coordinator
-            int potentialOriginalNodeId = Integer.MAX_VALUE - nodeId;
-            Node potentialOriginalNode = new CoordinatorAwareConstantNodeProvider(nodeId, false).provide();
-            return potentialOriginalNode == null ? null
-                    : new Node(Integer.MAX_VALUE - potentialOriginalNodeId, potentialOriginalNode.host(),
-                            potentialOriginalNode.port(), potentialOriginalNode.rack());
-        }
-    }
-    
     abstract class Call {
         private final boolean internal;
         private final String callName;
@@ -614,22 +550,16 @@ public class KafkaAdminClient extends AdminClient {
         private boolean aborted = false;
         private Node curNode = null;
         private long nextAllowedTryMs = 0;
-        private final AuthenticationRequestCompletionHandler callback;
 
         Call(boolean internal, String callName, long deadlineMs, NodeProvider nodeProvider) {
-            this(internal, callName, deadlineMs, nodeProvider, null);
-        }
-
-        Call(String callName, long deadlineMs, NodeProvider nodeProvider) {
-            this(false, callName, deadlineMs, nodeProvider);
-        }
-
-        Call(boolean internal, String callName, long deadlineMs, NodeProvider nodeProvider, AuthenticationRequestCompletionHandler callback) {
             this.internal = internal;
             this.callName = callName;
             this.deadlineMs = deadlineMs;
             this.nodeProvider = nodeProvider;
-            this.callback = callback;
+        }
+
+        Call(String callName, long deadlineMs, NodeProvider nodeProvider) {
+            this(false, callName, deadlineMs, nodeProvider);
         }
 
         protected Node curNode() {
@@ -751,31 +681,6 @@ public class KafkaAdminClient extends AdminClient {
         }
     }
 
-    /*
-     * We can't be sure if our callback handler was invoked when
-     * {@link #fail(long, Throwable)} is called because sometimes {@code fail()} is
-     * called prior to the request being sent and sometimes it is invoked after the
-     * response comes back. Therefore we avoid invoking {@code fail()} altogether
-     * for re-authentication calls and ensure the callback is always leveraged to
-     * report success or failure.
-     */
-    private abstract class ReauthenticationCall extends Call {
-        ReauthenticationCall(String callName, long deadlineMs, NodeProvider nodeProvider,
-                AuthenticationRequestCompletionHandler callback) {
-            super(false, callName, deadlineMs, nodeProvider, callback);
-        }
-
-        @Override
-        void handleResponse(AbstractResponse abstractResponse) {
-            log.warn("handleResponse invoked for re-authentication request (should never happen)");
-        }
-
-        @Override
-        void handleFailure(Throwable throwable) {
-            log.warn("handleFailure invoked for re-authentication request (should never happen)");
-        }        
-    }
-    
     static class TimeoutProcessorFactory {
         TimeoutProcessor create(long now) {
             return new TimeoutProcessor(now);
@@ -818,11 +723,7 @@ public class KafkaAdminClient extends AdminClient {
                 Call call = iter.next();
                 int remainingMs = calcTimeoutMsRemainingAsInt(now, call.deadlineMs);
                 if (remainingMs < 0) {
-                    TimeoutException timeoutException = new TimeoutException(msg);
-                    if (call.callback != null)
-                        call.callback.onException(timeoutException);
-                    else
-                        call.fail(now, timeoutException);
+                    call.fail(now, new TimeoutException(msg));
                     iter.remove();
                     numTimedOut++;
                 } else {
@@ -969,11 +870,7 @@ public class KafkaAdminClient extends AdminClient {
             } catch (Throwable t) {
                 // Handle authentication errors while choosing nodes.
                 log.debug("Unable to choose node for {}", call, t);
-                if (call.callback != null)
-                    call.callback.onException(
-                            t instanceof RuntimeException ? (RuntimeException) t : new RuntimeException(t));
-                else
-                    call.fail(now, t);
+                call.fail(now, t);
                 return true;
             }
         }
@@ -1006,17 +903,11 @@ public class KafkaAdminClient extends AdminClient {
                 try {
                     requestBuilder = call.createRequest(timeoutMs);
                 } catch (Throwable throwable) {
-                    KafkaException exception = new KafkaException(String.format(
-                        "Internal error sending %s to %s.", call.callName, node));
-                    if (call.callback != null)
-                        call.callback.onException(exception);
-                    else
-                        call.fail(now, exception);
+                    call.fail(now, new KafkaException(String.format(
+                        "Internal error sending %s to %s.", call.callName, node)));
                     continue;
                 }
-                ClientRequest clientRequest = call.callback == null
-                        ? client.newClientRequest(node.idString(), requestBuilder, now, true)
-                        : client.newClientRequest(node.idString(), requestBuilder, now, true, timeoutMs, call.callback);
+                ClientRequest clientRequest = client.newClientRequest(node.idString(), requestBuilder, now, true);
                 log.trace("Sending {} to {}. correlationId={}", requestBuilder, node, clientRequest.correlationId());
                 client.send(clientRequest, now);
                 getOrCreateListValue(callsInFlight, node.idString()).add(call);
@@ -1091,14 +982,7 @@ public class KafkaAdminClient extends AdminClient {
                         "that did not exist in callsInFlight", response.destination(), call);
                     continue;
                 }
-                
-                /*
-                 * Do not process success or failure here if there was a callback handler to
-                 * process the response.
-                 */
-                if (call.callback != null)
-                    continue;
-                
+
                 // Handle the result of the call. This may involve retrying the call, if we got a
                 // retryible exception.
                 if (response.versionMismatch() != null) {
@@ -1287,12 +1171,7 @@ public class KafkaAdminClient extends AdminClient {
                 client.wakeup(); // wake the thread if it is in poll()
             } else {
                 log.debug("The AdminClient thread has exited. Timing out {}.", call);
-                TimeoutException timeoutException = new TimeoutException("The AdminClient thread has exited.");
-                if (call.callback != null)
-                    call.callback.onException(timeoutException);
-                else {
-                    call.fail(Long.MAX_VALUE, timeoutException);
-                }
+                call.fail(Long.MAX_VALUE, new TimeoutException("The AdminClient thread has exited."));
             }
         }
 
@@ -1307,11 +1186,7 @@ public class KafkaAdminClient extends AdminClient {
         void call(Call call, long now) {
             if (hardShutdownTimeMs.get() != INVALID_SHUTDOWN_TIME) {
                 log.debug("The AdminClient is not accepting new calls. Timing out {}.", call);
-                TimeoutException timeoutException = new TimeoutException("The AdminClient thread is not accepting new calls.");
-                if (call.callback != null)
-                    call.callback.onException(timeoutException);
-                else
-                    call.fail(Long.MAX_VALUE, timeoutException);
+                call.fail(Long.MAX_VALUE, new TimeoutException("The AdminClient thread is not accepting new calls."));
             } else {
                 enqueue(call, now);
             }

@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.common.network;
 
+import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.config.SslConfigs;
@@ -25,7 +26,6 @@ import org.apache.kafka.common.security.JaasContext;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.Login;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
-import org.apache.kafka.common.security.authenticator.AuthenticationRequestEnqueuer;
 import org.apache.kafka.common.security.authenticator.CredentialCache;
 import org.apache.kafka.common.security.authenticator.DefaultLogin;
 import org.apache.kafka.common.security.authenticator.LoginManager;
@@ -78,15 +78,7 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
     private final Mode mode;
     private final Map<String, JaasContext> jaasContexts;
     private final boolean handshakeRequestEnable;
-    /*
-     * Ideally we would want to declare the authenticationRequestEnqueuer field as
-     * being "final" and set it in the constructor, but it is possible that we might
-     * need the SaslChannelBuilder in order to construct the
-     * authenticationRequestEnqueuer (e.g. if it is defined in a closure that
-     * captures a NetworkClient, which requires the channel builder). We therefore
-     * have to declare a setter and invoke it after the instance becomes available.
-     */
-    private AuthenticationRequestEnqueuer authenticationRequestEnqueuer = null;
+    private final Supplier<KafkaClient> kafkaClientSupplier;
     private final CredentialCache credentialCache;
     private final DelegationTokenCache tokenCache;
     private final Map<String, LoginManager> loginManagers;
@@ -105,7 +97,8 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                               String clientSaslMechanism,
                               boolean handshakeRequestEnable,
                               CredentialCache credentialCache,
-                              DelegationTokenCache tokenCache) {
+                              DelegationTokenCache tokenCache,
+                              Supplier<KafkaClient> kafkaClientSupplier) {
         this.mode = mode;
         this.jaasContexts = jaasContexts;
         this.loginManagers = new HashMap<>(jaasContexts.size());
@@ -118,6 +111,7 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
         this.credentialCache = credentialCache;
         this.tokenCache = tokenCache;
         this.saslCallbackHandlers = new HashMap<>();
+        this.kafkaClientSupplier = kafkaClientSupplier;
     }
 
     @SuppressWarnings("unchecked")
@@ -217,7 +211,6 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                         id,
                         socket.getInetAddress().getHostName(),
                         loginManager.serviceName(),
-                        authenticationRequestEnqueuer,
                         transportLayer,
                         subjects.get(clientSaslMechanism));
             }
@@ -237,10 +230,6 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
             handler.close();
     }
 
-    public void authenticationRequestEnqueuer(AuthenticationRequestEnqueuer authenticationRequestEnqueuer) {
-        this.authenticationRequestEnqueuer = authenticationRequestEnqueuer;
-    }
-    
     private boolean saslLoginRefreshReauthenticateEnable() {
         Object retvalObj = configs.get(SaslConfigs.SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE);
         return retvalObj == null || !(retvalObj instanceof Boolean) ? false
@@ -275,11 +264,10 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                String id,
                                                                String serverHost,
                                                                String servicePrincipal,
-                                                               AuthenticationRequestEnqueuer authenticationRequestEnqueuer,
                                                                TransportLayer transportLayer, Subject subject) {
         SaslClientAuthenticator retval = new SaslClientAuthenticator(configs, callbackHandler, id, subject,
                 servicePrincipal, serverHost, clientSaslMechanism, handshakeRequestEnable,
-                authenticationRequestEnqueuer, transportLayer);
+                transportLayer, kafkaClientSupplier);
         log.debug("Built: {}", retval);
         return retval;
     }

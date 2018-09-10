@@ -18,6 +18,7 @@ package org.apache.kafka.connect.runtime.distributed;
 
 import org.apache.kafka.clients.ApiVersions;
 import org.apache.kafka.clients.ClientUtils;
+import org.apache.kafka.clients.ClientUtils.KafkaClientSupplier;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.Metadata;
 import org.apache.kafka.clients.NetworkClient;
@@ -29,7 +30,6 @@ import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.MetricsReporter;
 import org.apache.kafka.common.network.ChannelBuilder;
-import org.apache.kafka.common.network.SaslChannelBuilder;
 import org.apache.kafka.common.network.Selector;
 import org.apache.kafka.common.utils.AppInfoParser;
 import org.apache.kafka.common.utils.LogContext;
@@ -97,7 +97,8 @@ public class WorkerGroupMember {
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config.getList(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG));
             this.metadata.update(Cluster.bootstrap(addresses), Collections.<String>emptySet(), 0);
             String metricGrpPrefix = "connect";
-            ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config);
+            KafkaClientSupplier kafkaClientSupplier = new KafkaClientSupplier();
+            ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config, kafkaClientSupplier);
             NetworkClient netClient = new NetworkClient(
                     new Selector(config.getLong(CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG), metrics, time, metricGrpPrefix, channelBuilder, logContext),
                     this.metadata,
@@ -112,6 +113,7 @@ public class WorkerGroupMember {
                     true,
                     new ApiVersions(),
                     logContext);
+            kafkaClientSupplier.kafkaClient(netClient);
             this.client = new ConsumerNetworkClient(
                     logContext,
                     netClient,
@@ -120,9 +122,6 @@ public class WorkerGroupMember {
                     retryBackoffMs,
                     config.getInt(CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG),
                     Integer.MAX_VALUE);
-            if (channelBuilder instanceof SaslChannelBuilder)
-                ((SaslChannelBuilder) channelBuilder)
-                        .authenticationRequestEnqueuer(client.authenticationRequestEnqueuer());
             this.coordinator = new WorkerCoordinator(
                     logContext,
                     this.client,

@@ -18,6 +18,7 @@ package org.apache.kafka.common.security.authenticator;
 
 import org.apache.kafka.clients.ClientResponse;
 import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.clients.NetworkClient;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.config.SaslConfigs;
@@ -65,6 +66,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 public class SaslClientAuthenticator implements Authenticator {
 
@@ -110,7 +112,7 @@ public class SaslClientAuthenticator implements Authenticator {
     private final Map<String, ?> configs;
     private final String clientPrincipalName;
     private final AuthenticateCallbackHandler callbackHandler;
-    private final AuthenticationRequestEnqueuer authenticationRequestEnqueuer;
+    private final Supplier<KafkaClient> kafkaClientSupplier;
 
     // buffers used in `authenticate`
     private NetworkReceive netInBuffer;
@@ -135,8 +137,8 @@ public class SaslClientAuthenticator implements Authenticator {
                                    String host,
                                    String mechanism,
                                    boolean handshakeRequestEnable,
-                                   AuthenticationRequestEnqueuer authenticationRequestEnqueuer,
-                                   TransportLayer transportLayer) {
+                                   TransportLayer transportLayer,
+                                   Supplier<KafkaClient> kafkaClientSupplier) {
         this.node = node;
         this.subject = subject;
         this.callbackHandler = callbackHandler;
@@ -144,10 +146,10 @@ public class SaslClientAuthenticator implements Authenticator {
         this.servicePrincipal = servicePrincipal;
         this.mechanism = mechanism;
         this.correlationId = -1;
-        this.authenticationRequestEnqueuer = authenticationRequestEnqueuer;
         this.transportLayer = transportLayer;
         this.configs = configs;
         this.saslAuthenticateVersion = DISABLE_KAFKA_SASL_AUTHENTICATE_HEADER;
+        this.kafkaClientSupplier = kafkaClientSupplier;
 
         try {
             setSaslState(handshakeRequestEnable ? SaslState.SEND_APIVERSIONS_REQUEST : SaslState.INITIAL);
@@ -168,10 +170,6 @@ public class SaslClientAuthenticator implements Authenticator {
 
     public Subject subject() {
         return subject;
-    }
-    
-    public AuthenticationRequestEnqueuer authenticationRequestEnqueuer() {
-        return authenticationRequestEnqueuer;
     }
     
     private SaslClient createSaslClient() {
@@ -375,9 +373,7 @@ public class SaslClientAuthenticator implements Authenticator {
 
     /**
      * Initiate re-authentication by enqueuing the appropriate initial
-     * re-authentication {@code ApiVersionsRequest} via the
-     * {@link AuthenticationRequestEnqueuer} provided at construction time and
-     * available at {@link #authenticationRequestEnqueuer()} and providing an
+     * re-authentication {@code ApiVersionsRequest} and providing an
      * {@link AuthenticationRequestCompletionHandler} that can process the result
      * and enqueue subsequent requests in the re-authentication dance as well as
      * provide the ultimate re-authentication success or failure result to the given
@@ -391,13 +387,14 @@ public class SaslClientAuthenticator implements Authenticator {
      */
     public void initiateReauthentication(Time time,
             AuthenticationSuccessOrFailureReceiver authenticationSuccessOrFailureReceiver) {
-        AuthenticationRequestEnqueuer authenticationRequestEnqueuer = authenticationRequestEnqueuer();
-        if (authenticationRequestEnqueuer == null) {
+        @SuppressWarnings("resource")
+        KafkaClient kafkaClient = kafkaClientSupplier != null ? kafkaClientSupplier.get() : null;
+        if (kafkaClient == null) {
             // should never happen; don't retry
             if (saslState != SaslState.CLOSED)
                 saslState = SaslState.FAILED;
             authenticationSuccessOrFailureReceiver.reauthenticationFailed(RetryIndication.DO_NOT_RETRY,
-                    "Cannot re-authenticate due to no request sender being available (should never happen)");
+                    "Cannot re-authenticate due to no KafkaClient being available (should never happen)");
             return;
         }
         if (saslState != SaslState.SEND_APIVERSIONS_REQUEST) {
@@ -412,9 +409,10 @@ public class SaslClientAuthenticator implements Authenticator {
                     "Re-authentication initiated but SASL Client is already complete (should never happen)");
             return;
         }
-        authenticationRequestEnqueuer
-                .enqueueRequest(new AuthenticationRequest(node, new ApiVersionsRequest.Builder((short) 0),
-                        authenticationRequestCompletionHandlerForApiVersionsRequest(time,
+        int timeoutMs = 1000; // TODO: ??? add KafkaClient#defaultTimeoutMs() method ???
+        kafkaClient.enqueueAuthenticationRequest(
+                kafkaClient.newClientRequest(node, new ApiVersionsRequest.Builder((short) 0), time.milliseconds(), true,
+                        timeoutMs, authenticationRequestCompletionHandlerForApiVersionsRequest(time,
                                 authenticationSuccessOrFailureReceiver)));
     }
 
@@ -432,7 +430,8 @@ public class SaslClientAuthenticator implements Authenticator {
                 try {
                     if (saslState == SaslState.SEND_APIVERSIONS_REQUEST) {
                         saslState = SaslState.RECEIVE_APIVERSIONS_RESPONSE;
-                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState,
+                                SaslClientAuthenticator.this);
                     }
                     if (saslState != SaslState.RECEIVE_APIVERSIONS_RESPONSE) {
                         notifyFailureDueToUnexpectedState(SaslState.RECEIVE_APIVERSIONS_RESPONSE,
@@ -464,8 +463,10 @@ public class SaslClientAuthenticator implements Authenticator {
                             return super.build(saslHandshakeVersion);
                         }
                     };
-                    authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
-                            saslHandshakeRequestBuilder,
+                    KafkaClient kafkaClient = kafkaClientSupplier.get();
+                    int timeoutMs = 1000; // TODO: ??? add KafkaClient#defaultTimeoutMs() method ???
+                    kafkaClient.enqueueAuthenticationRequest(kafkaClient.newClientRequest(node,
+                            saslHandshakeRequestBuilder, time.milliseconds(), true, timeoutMs,
                             completionHandlerForSaslHandshakeRequest(time, authenticationSuccessOrFailureReceiver)));
                 } catch (RuntimeException e) {
                     /*
@@ -506,7 +507,8 @@ public class SaslClientAuthenticator implements Authenticator {
                 try {
                     if (saslState == SaslState.SEND_HANDSHAKE_REQUEST) {
                         saslState = SaslState.RECEIVE_HANDSHAKE_RESPONSE;
-                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState,
+                                SaslClientAuthenticator.this);
                     }
                     if (saslState != SaslState.RECEIVE_HANDSHAKE_RESPONSE) {
                         notifyFailureDueToUnexpectedState(SaslState.RECEIVE_HANDSHAKE_RESPONSE,
@@ -540,8 +542,11 @@ public class SaslClientAuthenticator implements Authenticator {
                                 "Unexpected null SASL token (should never happen)");
                         return;
                     }
-                    authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
-                            new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)),
+                    KafkaClient kafkaClient = kafkaClientSupplier.get();
+                    int timeoutMs = 1000; // TODO: ??? add KafkaClient#defaultTimeoutMs() method ???
+                    kafkaClient.enqueueAuthenticationRequest(kafkaClient.newClientRequest(node,
+                            new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)), time.milliseconds(), true,
+                            timeoutMs,
                             completionHandlerForSaslAuthenticateRequest(time, authenticationSuccessOrFailureReceiver)));
                 } catch (RuntimeException e) {
                     /*
@@ -584,7 +589,8 @@ public class SaslClientAuthenticator implements Authenticator {
                 try {
                     if (saslState == SaslState.INITIAL) {
                         saslState = SaslState.INTERMEDIATE;
-                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState,
+                                SaslClientAuthenticator.this);
                     }
                     if (saslState != SaslState.INTERMEDIATE) {
                         notifyFailureDueToUnexpectedState(SaslState.INTERMEDIATE,
@@ -626,8 +632,11 @@ public class SaslClientAuthenticator implements Authenticator {
                                     "Unexpected null client SASL token when SASL Client is not yet complete (should never happen)");
                             return;
                         }
-                        authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
-                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)), this));
+                        KafkaClient kafkaClient = kafkaClientSupplier.get();
+                        int timeoutMs = 1000; // TODO: ??? add KafkaClient#defaultTimeoutMs() method ???
+                        kafkaClient.enqueueAuthenticationRequest(kafkaClient.newClientRequest(node,
+                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)), time.milliseconds(),
+                                true, timeoutMs, this));
                         return;
                     }
                     /*
@@ -635,10 +644,13 @@ public class SaslClientAuthenticator implements Authenticator {
                      */
                     if (clientToken != null) {
                         saslState = SaslState.CLIENT_COMPLETE;
-                        LOG.debug("Set saslState={} during re-authentication: {}", saslState, SaslClientAuthenticator.this);
-                        authenticationRequestEnqueuer.enqueueRequest(new AuthenticationRequest(node,
-                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)),
-                                completionHandlerForClientCompleteSaslAuthenticateRequest(time,
+                        LOG.debug("Set saslState={} during re-authentication: {}", saslState,
+                                SaslClientAuthenticator.this);
+                        KafkaClient kafkaClient = kafkaClientSupplier.get();
+                        int timeoutMs = 1000; // TODO: ??? add KafkaClient#defaultTimeoutMs() method ???
+                        kafkaClient.enqueueAuthenticationRequest(kafkaClient.newClientRequest(node,
+                                new SaslAuthenticateRequestBuilder(ByteBuffer.wrap(clientToken)), time.milliseconds(),
+                                true, timeoutMs, completionHandlerForClientCompleteSaslAuthenticateRequest(time,
                                         authenticationSuccessOrFailureReceiver)));
                         return;
                     }

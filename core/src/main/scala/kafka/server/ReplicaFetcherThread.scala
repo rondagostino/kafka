@@ -94,6 +94,11 @@ class ReplicaFetcherThread(name: String,
   private val brokerSupportsLeaderEpochRequest = brokerConfig.interBrokerProtocolVersion >= KAFKA_0_11_0_IV2
   private val fetchSessionHandler = new FetchSessionHandler(logContext, sourceBroker.id)
 
+  override def doWork() : Unit = {
+    super.doWork()
+    leaderEndpoint.maybeReauthenticate()
+  }
+  
   override protected def latestEpoch(topicPartition: TopicPartition): Option[Int] = {
     replicaMgr.getReplicaOrException(topicPartition).epochs.map(_.latestEpoch)
   }

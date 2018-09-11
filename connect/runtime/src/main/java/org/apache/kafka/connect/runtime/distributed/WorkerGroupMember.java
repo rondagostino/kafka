@@ -18,6 +18,7 @@ package org.apache.kafka.connect.runtime.distributed;
 
 import org.apache.kafka.clients.ApiVersions;
 import org.apache.kafka.clients.ClientUtils;
+import org.apache.kafka.clients.ClientUtils.KafkaClientSupplier;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.Metadata;
 import org.apache.kafka.clients.NetworkClient;
@@ -96,7 +97,8 @@ public class WorkerGroupMember {
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config.getList(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG));
             this.metadata.update(Cluster.bootstrap(addresses), Collections.<String>emptySet(), 0);
             String metricGrpPrefix = "connect";
-            ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config);
+            KafkaClientSupplier kafkaClientSupplier = new KafkaClientSupplier();
+            ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config, kafkaClientSupplier);
             NetworkClient netClient = new NetworkClient(
                     new Selector(config.getLong(CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG), metrics, time, metricGrpPrefix, channelBuilder, logContext),
                     this.metadata,
@@ -111,6 +113,7 @@ public class WorkerGroupMember {
                     true,
                     new ApiVersions(),
                     logContext);
+            kafkaClientSupplier.kafkaClient(netClient);
             this.client = new ConsumerNetworkClient(
                     logContext,
                     netClient,

@@ -111,13 +111,15 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
     val brokerNode = broker.node(config.interBrokerListenerName)
     val logContext = new LogContext(s"[Controller id=${config.brokerId}, targetBrokerId=${brokerNode.idString}] ")
     val networkClient = {
+      val kafkaClientSupplier = new ClientUtils.KafkaClientSupplier()
       val channelBuilder = ChannelBuilders.clientChannelBuilder(
         config.interBrokerSecurityProtocol,
         JaasContext.Type.SERVER,
         config,
         config.interBrokerListenerName,
         config.saslMechanismInterBrokerProtocol,
-        config.saslInterBrokerHandshakeRequestEnable
+        config.saslInterBrokerHandshakeRequestEnable,
+        kafkaClientSupplier
       )
       val selector = new Selector(
         NetworkReceive.UNLIMITED,
@@ -130,7 +132,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
         channelBuilder,
         logContext
       )
-      new NetworkClient(
+      val retvalNetworkClient = new NetworkClient(
         selector,
         new ManualMetadataUpdater(Seq(brokerNode).asJava),
         config.brokerId.toString,
@@ -145,6 +147,8 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
         new ApiVersions,
         logContext
       )
+      kafkaClientSupplier.kafkaClient(retvalNetworkClient)
+      retvalNetworkClient
     }
     val threadName = threadNamePrefix match {
       case None => s"Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
@@ -220,7 +224,15 @@ class RequestSendThread(val controllerId: Int,
 
     def backoff(): Unit = pause(100, TimeUnit.MILLISECONDS)
 
-    val QueueItem(apiKey, requestBuilder, callback, enqueueTimeMs) = queue.take()
+    val obj = queue.poll(10, TimeUnit.SECONDS)
+    if (obj == null) {
+      // re-authenticate (to completion rather than interleaved) if necessary
+      while (networkClient.hasReauthenticationRequest())
+        networkClient.poll(Long.MaxValue, time.milliseconds())
+      return
+    }
+    val QueueItem(apiKey, requestBuilder, callback, enqueueTimeMs) = obj
+    
     requestRateAndQueueTimeMetrics.update(time.milliseconds() - enqueueTimeMs, TimeUnit.MILLISECONDS)
 
     var clientResponse: ClientResponse = null

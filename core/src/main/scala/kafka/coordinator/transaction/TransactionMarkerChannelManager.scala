@@ -45,13 +45,15 @@ object TransactionMarkerChannelManager {
             txnMarkerPurgatory: DelayedOperationPurgatory[DelayedTxnMarker],
             time: Time,
             logContext: LogContext): TransactionMarkerChannelManager = {
+    val kafkaClientSupplier = new ClientUtils.KafkaClientSupplier()
     val channelBuilder = ChannelBuilders.clientChannelBuilder(
       config.interBrokerSecurityProtocol,
       JaasContext.Type.SERVER,
       config,
       config.interBrokerListenerName,
       config.saslMechanismInterBrokerProtocol,
-      config.saslInterBrokerHandshakeRequestEnable
+      config.saslInterBrokerHandshakeRequestEnable,
+      kafkaClientSupplier
     )
     val selector = new Selector(
       NetworkReceive.UNLIMITED,
@@ -79,6 +81,7 @@ object TransactionMarkerChannelManager {
       new ApiVersions,
       logContext
     )
+    kafkaClientSupplier.kafkaClient(networkClient)
 
     new TransactionMarkerChannelManager(config,
       metadataCache,

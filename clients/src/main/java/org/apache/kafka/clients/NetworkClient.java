@@ -48,11 +48,15 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 
 /**
@@ -111,6 +115,9 @@ public class NetworkClient implements KafkaClient {
 
     private final Sensor throttleTimeSensor;
 
+    private final ConcurrentMap<String, ClientRequest> injectedReauthenticationClientRequestsByNode = new ConcurrentHashMap<>();
+    private final Set<Integer> inflightReauthenticationRequestCorrelationIds = new HashSet<>();
+    
     public NetworkClient(Selectable selector,
                          Metadata metadata,
                          String clientId,
@@ -245,6 +252,19 @@ public class NetworkClient implements KafkaClient {
         this.log = logContext.logger(NetworkClient.class);
     }
 
+    @Override
+    public boolean hasReauthenticationRequest() {
+        return !inflightReauthenticationRequestCorrelationIds.isEmpty()
+                || !injectedReauthenticationClientRequestsByNode.isEmpty();
+    }
+
+    @Override
+    public void enqueueAuthenticationRequest(ClientRequest clientRequest) {
+        injectedReauthenticationClientRequestsByNode.put(clientRequest.destination(), clientRequest);
+        // interrupt any in-progress poll() operation
+        wakeup();
+    }
+
     /**
      * Begin connecting to the given node, return true if we are already connected and ready to send to that node.
      *
@@ -287,17 +307,24 @@ public class NetworkClient implements KafkaClient {
         List<ApiKeys> requestTypes = new ArrayList<>();
         long now = time.milliseconds();
         for (InFlightRequest request : inFlightRequests.clearAll(nodeId)) {
-            if (request.isInternalRequest) {
+            if (request.type == InFlightRequest.Type.INTERNAL_METADATA_OR_API_VERSIONS) {
                 if (request.header.apiKey() == ApiKeys.METADATA) {
                     metadataUpdater.handleDisconnection(request.destination);
                 }
             } else {
                 requestTypes.add(request.header.apiKey());
-                abortedSends.add(new ClientResponse(request.header,
+                ClientResponse clientResponse = new ClientResponse(request.header,
                         request.callback, request.destination, request.createdTimeMs, now,
-                        true, null, null, null));
+                        true, null, null, null);
+                if (request.type == InFlightRequest.Type.INTERNAL_REAUTHENTICATION) {
+                    // make sure this doesn't return from poll()
+                    inflightReauthenticationRequestCorrelationIds.remove(request.header.correlationId());
+                    clientResponse.onComplete();
+                } else
+                    abortedSends.add(clientResponse);
             }
         }
+        removePendingReauthenticationRequest(nodeId);
         connectionStates.disconnected(nodeId, now);
         if (log.isDebugEnabled()) {
             log.debug("Manually disconnected from {}. Removed requests: {}.", nodeId,
@@ -315,9 +342,16 @@ public class NetworkClient implements KafkaClient {
     @Override
     public void close(String nodeId) {
         selector.close(nodeId);
-        for (InFlightRequest request : inFlightRequests.clearAll(nodeId))
-            if (request.isInternalRequest && request.header.apiKey() == ApiKeys.METADATA)
+        for (InFlightRequest request : inFlightRequests.clearAll(nodeId)) {
+            if (request.type == InFlightRequest.Type.INTERNAL_METADATA_OR_API_VERSIONS && request.header.apiKey() == ApiKeys.METADATA)
                 metadataUpdater.handleDisconnection(request.destination);
+            if (request.type == InFlightRequest.Type.INTERNAL_REAUTHENTICATION) {
+                inflightReauthenticationRequestCorrelationIds.remove(request.header.correlationId());
+                // mark the re-authentication as having failed due to disconnect
+                request.callback.onComplete(request.disconnected(time.milliseconds(), null));
+            }
+        }
+        removePendingReauthenticationRequest(nodeId);
         connectionStates.remove(nodeId);
     }
 
@@ -408,18 +442,18 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public void send(ClientRequest request, long now) {
-        doSend(request, false, now);
+        doSend(request, InFlightRequest.Type.EXTERNAL, now);
     }
 
     private void sendInternalMetadataRequest(MetadataRequest.Builder builder,
                                              String nodeConnectionId, long now) {
         ClientRequest clientRequest = newClientRequest(nodeConnectionId, builder, now, true);
-        doSend(clientRequest, true, now);
+        doSend(clientRequest, InFlightRequest.Type.INTERNAL_METADATA_OR_API_VERSIONS, now);
     }
 
-    private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now) {
+    private void doSend(ClientRequest clientRequest, InFlightRequest.Type type, long now) {
         String nodeId = clientRequest.destination();
-        if (!isInternalRequest) {
+        if (type == InFlightRequest.Type.EXTERNAL) {
             // If this request came from outside the NetworkClient, validate
             // that we can send data.  If the request is internal, we trust
             // that internal code has done this validation.  Validation
@@ -447,7 +481,7 @@ public class NetworkClient implements KafkaClient {
             }
             // The call to build may also throw UnsupportedVersionException, if there are essential
             // fields that cannot be represented in the chosen version.
-            doSend(clientRequest, isInternalRequest, now, builder.build(version));
+            doSend(clientRequest, type, now, builder.build(version));
         } catch (UnsupportedVersionException unsupportedVersionException) {
             // If the version is not supported, skip sending the request over the wire.
             // Instead, simply add it to the local queue of aborted requests.
@@ -456,11 +490,16 @@ public class NetworkClient implements KafkaClient {
             ClientResponse clientResponse = new ClientResponse(clientRequest.makeHeader(builder.latestAllowedVersion()),
                     clientRequest.callback(), clientRequest.destination(), now, now,
                     false, unsupportedVersionException, null, null);
-            abortedSends.add(clientResponse);
+            if (type == InFlightRequest.Type.INTERNAL_REAUTHENTICATION) {
+                // make sure this doesn't return from poll()
+                inflightReauthenticationRequestCorrelationIds.remove(clientRequest.correlationId());
+                clientResponse.onComplete();
+            } else
+                abortedSends.add(clientResponse);
         }
     }
 
-    private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now, AbstractRequest request) {
+    private void doSend(ClientRequest clientRequest, InFlightRequest.Type type, long now, AbstractRequest request) {
         String destination = clientRequest.destination();
         RequestHeader header = clientRequest.makeHeader(request.version());
         if (log.isDebugEnabled()) {
@@ -477,7 +516,7 @@ public class NetworkClient implements KafkaClient {
         InFlightRequest inFlightRequest = new InFlightRequest(
                 clientRequest,
                 header,
-                isInternalRequest,
+                type,
                 request,
                 send,
                 now);
@@ -503,6 +542,17 @@ public class NetworkClient implements KafkaClient {
             handleAbortedSends(responses);
             completeResponses(responses);
             return responses;
+        }
+
+        // Inject any sends related to re-authentication where possible
+        for (Iterator<Map.Entry<String, ClientRequest>> iterator = injectedReauthenticationClientRequestsByNode
+                .entrySet().iterator(); iterator.hasNext();) {
+            ClientRequest clientRequest = iterator.next().getValue();
+            if (canSendRequest(clientRequest.destination(), now)) {
+                iterator.remove();
+                doSend(clientRequest, InFlightRequest.Type.INTERNAL_REAUTHENTICATION, now);
+                inflightReauthenticationRequestCorrelationIds.add(clientRequest.correlationId());
+            }
         }
 
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
@@ -676,11 +726,32 @@ public class NetworkClient implements KafkaClient {
         for (InFlightRequest request : this.inFlightRequests.clearAll(nodeId)) {
             log.trace("Cancelled request {} {} with correlation id {} due to node {} being disconnected",
                     request.header.apiKey(), request.request, request.header.correlationId(), nodeId);
-            if (!request.isInternalRequest)
-                responses.add(request.disconnected(now, disconnectState.exception()));
-            else if (request.header.apiKey() == ApiKeys.METADATA)
+            if (request.type != InFlightRequest.Type.INTERNAL_METADATA_OR_API_VERSIONS) {
+                if (request.type == InFlightRequest.Type.INTERNAL_REAUTHENTICATION) {
+                    // make sure this doesn't return from poll()
+                    inflightReauthenticationRequestCorrelationIds.remove(request.header.correlationId());
+                    request.disconnected(now, disconnectState.exception()).onComplete();
+                } else
+                    responses.add(request.disconnected(now, disconnectState.exception()));
+            } else if (request.header.apiKey() == ApiKeys.METADATA)
                 metadataUpdater.handleDisconnection(request.destination);
         }
+        removePendingReauthenticationRequest(nodeId);
+    }
+
+    private void removePendingReauthenticationRequest(String nodeId) {
+        ClientRequest injectedReauthenticationClientRequest = injectedReauthenticationClientRequestsByNode
+                .remove(nodeId);
+        if (injectedReauthenticationClientRequest != null)
+            // invoke the callback with a "disconnected" response
+            injectedReauthenticationClientRequest.callback()
+                    .onComplete(new ClientResponse(
+                            injectedReauthenticationClientRequest.makeHeader(
+                                    injectedReauthenticationClientRequest.requestBuilder().latestAllowedVersion()),
+                            injectedReauthenticationClientRequest.callback(),
+                            injectedReauthenticationClientRequest.destination(),
+                            injectedReauthenticationClientRequest.createdTimeMs(), time.milliseconds(), true, null,
+                            null, null));
     }
 
     /**
@@ -763,11 +834,15 @@ public class NetworkClient implements KafkaClient {
             // If the received response includes a throttle delay, throttle the connection.
             AbstractResponse body = AbstractResponse.parseResponse(req.header.apiKey(), responseStruct);
             maybeThrottle(body, req.header.apiVersion(), req.destination, now);
-            if (req.isInternalRequest && body instanceof MetadataResponse)
+            if (req.type == InFlightRequest.Type.INTERNAL_METADATA_OR_API_VERSIONS && body instanceof MetadataResponse)
                 metadataUpdater.handleCompletedMetadataResponse(req.header, now, (MetadataResponse) body);
-            else if (req.isInternalRequest && body instanceof ApiVersionsResponse)
+            else if (req.type == InFlightRequest.Type.INTERNAL_METADATA_OR_API_VERSIONS && body instanceof ApiVersionsResponse)
                 handleApiVersionsResponse(responses, req, now, (ApiVersionsResponse) body);
-            else
+            else if (req.type == InFlightRequest.Type.INTERNAL_REAUTHENTICATION) {
+                // make sure this doesn't return from poll()
+                inflightReauthenticationRequestCorrelationIds.remove(req.header.correlationId());
+                req.completed(body, now).onComplete();
+            } else
                 responses.add(req.completed(body, now));
         }
     }
@@ -838,7 +913,7 @@ public class NetworkClient implements KafkaClient {
                 log.debug("Initiating API versions fetch from node {}.", node);
                 ApiVersionsRequest.Builder apiVersionRequestBuilder = entry.getValue();
                 ClientRequest clientRequest = newClientRequest(node, apiVersionRequestBuilder, now, true);
-                doSend(clientRequest, true, now);
+                doSend(clientRequest, InFlightRequest.Type.INTERNAL_METADATA_OR_API_VERSIONS, now);
                 iter.remove();
             }
         }
@@ -1068,12 +1143,16 @@ public class NetworkClient implements KafkaClient {
     }
 
     static class InFlightRequest {
+        enum Type {
+            INTERNAL_METADATA_OR_API_VERSIONS, INTERNAL_REAUTHENTICATION, EXTERNAL
+        };
+
         final RequestHeader header;
         final String destination;
         final RequestCompletionHandler callback;
         final boolean expectResponse;
         final AbstractRequest request;
-        final boolean isInternalRequest; // used to flag requests which are initiated internally by NetworkClient
+        final Type type;
         final Send send;
         final long sendTimeMs;
         final long createdTimeMs;
@@ -1081,7 +1160,7 @@ public class NetworkClient implements KafkaClient {
 
         public InFlightRequest(ClientRequest clientRequest,
                                RequestHeader header,
-                               boolean isInternalRequest,
+                               Type type,
                                AbstractRequest request,
                                Send send,
                                long sendTimeMs) {
@@ -1091,7 +1170,7 @@ public class NetworkClient implements KafkaClient {
                  clientRequest.destination(),
                  clientRequest.callback(),
                  clientRequest.expectResponse(),
-                 isInternalRequest,
+                 type,
                  request,
                  send,
                  sendTimeMs);
@@ -1103,7 +1182,7 @@ public class NetworkClient implements KafkaClient {
                                String destination,
                                RequestCompletionHandler callback,
                                boolean expectResponse,
-                               boolean isInternalRequest,
+                               Type type,
                                AbstractRequest request,
                                Send send,
                                long sendTimeMs) {
@@ -1112,8 +1191,8 @@ public class NetworkClient implements KafkaClient {
             this.createdTimeMs = createdTimeMs;
             this.destination = destination;
             this.callback = callback;
-            this.expectResponse = expectResponse;
-            this.isInternalRequest = isInternalRequest;
+            this.expectResponse = expectResponse || type == InFlightRequest.Type.INTERNAL_REAUTHENTICATION;
+            this.type = type;
             this.request = request;
             this.send = send;
             this.sendTimeMs = sendTimeMs;
@@ -1136,7 +1215,7 @@ public class NetworkClient implements KafkaClient {
                     ", expectResponse=" + expectResponse +
                     ", createdTimeMs=" + createdTimeMs +
                     ", sendTimeMs=" + sendTimeMs +
-                    ", isInternalRequest=" + isInternalRequest +
+                    ", type=" + type +
                     ", request=" + request +
                     ", callback=" + callback +
                     ", send=" + send + ")";

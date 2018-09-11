@@ -1390,12 +1390,22 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleSaslHandshakeRequest(request: RequestChannel.Request) {
-    sendResponseMaybeThrottle(request, _ => new SaslHandshakeResponse(Errors.ILLEGAL_SASL_STATE, Collections.emptySet()))
+    requestChannel.kafkaChannel(request) match {
+      case Some(kafkaChannel) =>
+        sendResponseMaybeThrottle(request, _ => kafkaChannel.respondToReauthenticationSaslHandshakeRequest(request.header, request.body[SaslHandshakeRequest]))
+      case None =>
+        sendResponseMaybeThrottle(request, _ => new SaslHandshakeResponse(Errors.ILLEGAL_SASL_STATE, Collections.emptySet()))
+    }
   }
 
   def handleSaslAuthenticateRequest(request: RequestChannel.Request) {
-    sendResponseMaybeThrottle(request, _ => new SaslAuthenticateResponse(Errors.ILLEGAL_SASL_STATE,
-      "SaslAuthenticate request received after successful authentication"))
+    requestChannel.kafkaChannel(request) match {
+      case Some(kafkaChannel) =>
+        sendResponseMaybeThrottle(request, _ => kafkaChannel.respondToReauthenticationSaslAuthenticateRequest(request.header, request.body[SaslAuthenticateRequest]))
+      case None =>
+        sendResponseMaybeThrottle(request, _ => new SaslAuthenticateResponse(Errors.ILLEGAL_SASL_STATE,
+            "SaslAuthenticate request received but could not find channel (should not happen)"))
+    }
   }
 
   def handleApiVersionsRequest(request: RequestChannel.Request) {

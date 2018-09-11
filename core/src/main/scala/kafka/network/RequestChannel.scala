@@ -26,6 +26,7 @@ import com.yammer.metrics.core.{Gauge, Meter}
 import kafka.metrics.KafkaMetricsGroup
 import kafka.utils.{Logging, NotNothing}
 import org.apache.kafka.common.memory.MemoryPool
+import org.apache.kafka.common.network.KafkaChannel
 import org.apache.kafka.common.network.Send
 import org.apache.kafka.common.protocol.{ApiKeys, Errors}
 import org.apache.kafka.common.requests._
@@ -305,6 +306,10 @@ class RequestChannel(val queueSize: Int) extends KafkaMetricsGroup {
     removeMetric(ResponseQueueSizeMetric, Map(ProcessorMetricTag -> processorId.toString))
   }
 
+  def kafkaChannel(request: Request) : Option[KafkaChannel] =
+    processors.get(request.processor).openOrClosingChannel(request.context.connectionId)
+
+ 
   /** Send a request to be handled, potentially blocking until there is room in the queue for the request */
   def sendRequest(request: RequestChannel.Request) {
     requestQueue.put(request)

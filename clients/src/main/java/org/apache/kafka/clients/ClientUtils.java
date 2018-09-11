@@ -30,12 +30,26 @@ import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static org.apache.kafka.common.utils.Utils.getHost;
 import static org.apache.kafka.common.utils.Utils.getPort;
 
 public final class ClientUtils {
+    public static class KafkaClientSupplier implements Supplier<KafkaClient> {
+        private KafkaClient kafkaClient = null;
+
+        public void kafkaClient(KafkaClient kafkaClient) {
+            this.kafkaClient = Objects.requireNonNull(kafkaClient);
+        }
+
+        @Override
+        public KafkaClient get() {
+            return kafkaClient;
+        }
+    }
     private static final Logger log = LoggerFactory.getLogger(ClientUtils.class);
 
     private ClientUtils() {}
@@ -83,9 +97,18 @@ public final class ClientUtils {
      * @return configured ChannelBuilder based on the configs.
      */
     public static ChannelBuilder createChannelBuilder(AbstractConfig config) {
+        return createChannelBuilder(config, null);
+    }
+
+    /**
+     * @param config client configs
+     * @param kafkaClientSupplier provides access to KafkaClient for channel re-authentication purposes
+     * @return configured ChannelBuilder based on the configs.
+     */
+    public static ChannelBuilder createChannelBuilder(AbstractConfig config, Supplier<KafkaClient> kafkaClientSupplier) {
         SecurityProtocol securityProtocol = SecurityProtocol.forName(config.getString(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG));
         String clientSaslMechanism = config.getString(SaslConfigs.SASL_MECHANISM);
         return ChannelBuilders.clientChannelBuilder(securityProtocol, JaasContext.Type.CLIENT, config, null,
-                clientSaslMechanism, true);
+                clientSaslMechanism, true, kafkaClientSupplier);
     }
 }

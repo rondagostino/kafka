@@ -30,12 +30,15 @@ import org.apache.kafka.common.Node
 import org.apache.kafka.common.requests.AbstractRequest.Builder
 
 import scala.collection.JavaConverters._
+import scala.util.control.Breaks._
 
 trait BlockingSend {
 
   def sendRequest(requestBuilder: AbstractRequest.Builder[_ <: AbstractRequest]): ClientResponse
 
   def close()
+  
+  def maybeReauthenticate()
 }
 
 class ReplicaFetcherBlockingSend(sourceBroker: BrokerEndPoint,
@@ -105,5 +108,14 @@ class ReplicaFetcherBlockingSend(sourceBroker: BrokerEndPoint,
 
   def close(): Unit = {
     networkClient.close()
+  }
+  
+  def maybeReauthenticate() : Unit = {
+    // Send a single request if it exists and receive the response (i.e. support interleaving)
+    while (networkClient.hasReauthenticationRequest()) {
+      networkClient.poll(Long.MaxValue, time.milliseconds())
+      if (!networkClient.hasInFlightRequests())
+        break // Response has been received.
+    }
   }
 }

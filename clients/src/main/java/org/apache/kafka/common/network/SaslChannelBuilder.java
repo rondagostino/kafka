@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.common.network;
 
+import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.config.SslConfigs;
@@ -32,6 +33,7 @@ import org.apache.kafka.common.security.authenticator.SaslClientAuthenticator;
 import org.apache.kafka.common.security.authenticator.SaslClientCallbackHandler;
 import org.apache.kafka.common.security.authenticator.SaslServerAuthenticator;
 import org.apache.kafka.common.security.authenticator.SaslServerCallbackHandler;
+import org.apache.kafka.common.security.expiring.internals.ClientChannelCredentialTracker;
 import org.apache.kafka.common.security.kerberos.KerberosClientCallbackHandler;
 import org.apache.kafka.common.security.kerberos.KerberosLogin;
 import org.apache.kafka.common.security.kerberos.KerberosShortNamer;
@@ -62,6 +64,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import javax.security.auth.Subject;
 
@@ -75,6 +78,7 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
     private final Mode mode;
     private final Map<String, JaasContext> jaasContexts;
     private final boolean handshakeRequestEnable;
+    private final Supplier<KafkaClient> kafkaClientSupplier;
     private final CredentialCache credentialCache;
     private final DelegationTokenCache tokenCache;
     private final Map<String, LoginManager> loginManagers;
@@ -86,14 +90,28 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
     private Map<String, AuthenticateCallbackHandler> saslCallbackHandlers;
 
     public SaslChannelBuilder(Mode mode,
-                              Map<String, JaasContext> jaasContexts,
-                              SecurityProtocol securityProtocol,
-                              ListenerName listenerName,
-                              boolean isInterBrokerListener,
-                              String clientSaslMechanism,
-                              boolean handshakeRequestEnable,
-                              CredentialCache credentialCache,
-                              DelegationTokenCache tokenCache) {
+            Map<String, JaasContext> jaasContexts,
+            SecurityProtocol securityProtocol,
+            ListenerName listenerName,
+            boolean isInterBrokerListener,
+            String clientSaslMechanism,
+            boolean handshakeRequestEnable,
+            CredentialCache credentialCache,
+            DelegationTokenCache tokenCache) {
+        this(mode, jaasContexts, securityProtocol, listenerName, isInterBrokerListener, clientSaslMechanism,
+                handshakeRequestEnable, credentialCache, tokenCache, null);
+    }
+
+    public SaslChannelBuilder(Mode mode,
+            Map<String, JaasContext> jaasContexts,
+            SecurityProtocol securityProtocol,
+            ListenerName listenerName,
+            boolean isInterBrokerListener,
+            String clientSaslMechanism,
+            boolean handshakeRequestEnable,
+            CredentialCache credentialCache,
+            DelegationTokenCache tokenCache,
+            Supplier<KafkaClient> kafkaClientSupplier) {
         this.mode = mode;
         this.jaasContexts = jaasContexts;
         this.loginManagers = new HashMap<>(jaasContexts.size());
@@ -106,6 +124,7 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
         this.credentialCache = credentialCache;
         this.tokenCache = tokenCache;
         this.saslCallbackHandlers = new HashMap<>();
+        this.kafkaClientSupplier = kafkaClientSupplier;
     }
 
     @SuppressWarnings("unchecked")
@@ -141,7 +160,16 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                 // use KerberosLogin only for the LoginContext corresponding to GSSAPI
                 LoginManager loginManager = LoginManager.acquireLoginManager(entry.getValue(), mechanism, defaultLoginClass, configs);
                 loginManagers.put(mechanism, loginManager);
-                subjects.put(mechanism, loginManager.subject());
+                Subject subject = loginManager.subject();
+                if (mode == Mode.CLIENT) {
+                    if (saslLoginRefreshReauthenticateEnable()) {
+                        log.info("SASL Login Refresh Re-Authenticate ENABLED");
+                        if (subject.getPrivateCredentials(ClientChannelCredentialTracker.class).isEmpty())
+                            subject.getPrivateCredentials().add(new ClientChannelCredentialTracker());
+                    } else
+                        log.info("SASL Login Refresh Re-Authenticate DISABLED");
+                }
+                subjects.put(mechanism, subject);
             }
             if (this.securityProtocol == SecurityProtocol.SASL_SSL) {
                 // Disable SSL client authentication as we are using SASL authentication
@@ -182,16 +210,16 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
             SocketChannel socketChannel = (SocketChannel) key.channel();
             Socket socket = socketChannel.socket();
             TransportLayer transportLayer = buildTransportLayer(id, key, socketChannel);
-            Authenticator authenticator;
+            Supplier<Authenticator> authenticatorSupplier;
             if (mode == Mode.SERVER) {
-                authenticator = buildServerAuthenticator(configs,
+                authenticatorSupplier = () -> buildServerAuthenticator(configs,
                         saslCallbackHandlers,
                         id,
                         transportLayer,
                         subjects);
             } else {
                 LoginManager loginManager = loginManagers.get(clientSaslMechanism);
-                authenticator = buildClientAuthenticator(configs,
+                authenticatorSupplier = () -> buildClientAuthenticator(configs,
                         saslCallbackHandlers.get(clientSaslMechanism),
                         id,
                         socket.getInetAddress().getHostName(),
@@ -199,7 +227,7 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                         transportLayer,
                         subjects.get(clientSaslMechanism));
             }
-            return new KafkaChannel(id, transportLayer, authenticator, maxReceiveSize, memoryPool != null ? memoryPool : MemoryPool.NONE);
+            return new KafkaChannel(id, transportLayer, authenticatorSupplier, maxReceiveSize, memoryPool != null ? memoryPool : MemoryPool.NONE);
         } catch (Exception e) {
             log.info("Failed to create channel due to ", e);
             throw new KafkaException(e);
@@ -213,6 +241,12 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
         loginManagers.clear();
         for (AuthenticateCallbackHandler handler : saslCallbackHandlers.values())
             handler.close();
+    }
+
+    private boolean saslLoginRefreshReauthenticateEnable() {
+        Object retvalObj = configs.get(SaslConfigs.SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE);
+        return retvalObj == null || !(retvalObj instanceof Boolean) ? false
+                : Boolean.class.cast(retvalObj).booleanValue();
     }
 
     private TransportLayer buildTransportLayer(String id, SelectionKey key, SocketChannel socketChannel) throws IOException {
@@ -229,9 +263,11 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                Map<String, AuthenticateCallbackHandler> callbackHandlers,
                                                                String id,
                                                                TransportLayer transportLayer,
-                                                               Map<String, Subject> subjects) throws IOException {
-        return new SaslServerAuthenticator(configs, callbackHandlers, id, subjects,
+                                                               Map<String, Subject> subjects) {
+        SaslServerAuthenticator retval = new SaslServerAuthenticator(configs, callbackHandlers, id, subjects,
                 kerberosShortNamer, listenerName, securityProtocol, transportLayer);
+        log.debug("Built: {}", retval);
+        return retval;
     }
 
     // Visible to override for testing
@@ -240,9 +276,12 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                String id,
                                                                String serverHost,
                                                                String servicePrincipal,
-                                                               TransportLayer transportLayer, Subject subject) throws IOException {
-        return new SaslClientAuthenticator(configs, callbackHandler, id, subject, servicePrincipal,
-                serverHost, clientSaslMechanism, handshakeRequestEnable, transportLayer);
+                                                               TransportLayer transportLayer, Subject subject) {
+        SaslClientAuthenticator retval = new SaslClientAuthenticator(configs, callbackHandler, id, subject,
+                servicePrincipal, serverHost, clientSaslMechanism, handshakeRequestEnable,
+                transportLayer, kafkaClientSupplier);
+        log.debug("Built: {}", retval);
+        return retval;
     }
 
     // Package private for testing

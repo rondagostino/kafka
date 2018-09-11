@@ -75,11 +75,13 @@
     </subpackage>
 
     <subpackage name="network">
+      <allow pkg="org.apache.kafka.clients" />
       <allow pkg="org.apache.kafka.common.security.auth" />
       <allow pkg="org.apache.kafka.common.protocol" />
       <allow pkg="org.apache.kafka.common.config" />
       <allow pkg="org.apache.kafka.common.metrics" />
       <allow pkg="org.apache.kafka.common.security" />
+      <allow pkg="org.apache.kafka.common.requests" />
     </subpackage>
 
     <subpackage name="resource">
@@ -158,15 +160,18 @@
     <allow pkg="org.apache.kafka.test" />
 
     <subpackage name="consumer">
+      <allow pkg="org.apache.kafka.clients" />
       <allow pkg="org.apache.kafka.clients.consumer" />
     </subpackage>
 
     <subpackage name="producer">
+      <allow pkg="org.apache.kafka.clients" />
       <allow pkg="org.apache.kafka.clients.consumer" />
       <allow pkg="org.apache.kafka.clients.producer" />
     </subpackage>
 
     <subpackage name="admin">
+      <allow pkg="org.apache.kafka.clients" />
       <allow pkg="org.apache.kafka.clients.admin" />
       <allow pkg="org.apache.kafka.clients.consumer.internals" />
       <allow pkg="org.apache.kafka.clients.consumer" />

@@ -27,6 +27,7 @@ import org.apache.kafka.common.security.auth.KafkaPrincipalBuilder;
 import org.apache.kafka.common.security.authenticator.CredentialCache;
 import org.apache.kafka.common.security.kerberos.KerberosShortNamer;
 import org.apache.kafka.common.security.token.delegation.internals.DelegationTokenCache;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 
 import java.util.Collections;
@@ -35,7 +36,7 @@ import java.util.List;
 import java.util.Map;
 
 public class ChannelBuilders {
-
+    private static final Time TIME = Time.SYSTEM;
     private ChannelBuilders() { }
 
     /**
@@ -63,7 +64,7 @@ public class ChannelBuilders {
                 throw new IllegalArgumentException("`clientSaslMechanism` must be non-null in client mode if `securityProtocol` is `" + securityProtocol + "`");
         }
         return create(securityProtocol, Mode.CLIENT, contextType, config, listenerName, false, clientSaslMechanism,
-                saslHandshakeRequestEnable, null, null);
+                saslHandshakeRequestEnable, null, null, TIME);
     }
 
     /**
@@ -80,7 +81,7 @@ public class ChannelBuilders {
                                                       CredentialCache credentialCache,
                                                       DelegationTokenCache tokenCache) {
         return create(securityProtocol, Mode.SERVER, JaasContext.Type.SERVER, config, listenerName,
-                isInterBrokerListener, null, true, credentialCache, tokenCache);
+                isInterBrokerListener, null, true, credentialCache, tokenCache, TIME);
     }
 
     private static ChannelBuilder create(SecurityProtocol securityProtocol,
@@ -92,7 +93,8 @@ public class ChannelBuilders {
                                          String clientSaslMechanism,
                                          boolean saslHandshakeRequestEnable,
                                          CredentialCache credentialCache,
-                                         DelegationTokenCache tokenCache) {
+                                         DelegationTokenCache tokenCache,
+                                         Time time) {
         Map<String, ?> configs;
         if (listenerName == null)
             configs = config.values();
@@ -103,7 +105,7 @@ public class ChannelBuilders {
         switch (securityProtocol) {
             case SSL:
                 requireNonNullMode(mode, securityProtocol);
-                channelBuilder = new SslChannelBuilder(mode, listenerName, isInterBrokerListener);
+                channelBuilder = new SslChannelBuilder(mode, listenerName, isInterBrokerListener, time);
                 break;
             case SASL_SSL:
             case SASL_PLAINTEXT:
@@ -128,10 +130,11 @@ public class ChannelBuilders {
                         clientSaslMechanism,
                         saslHandshakeRequestEnable,
                         credentialCache,
-                        tokenCache);
+                        tokenCache,
+                        time);
                 break;
             case PLAINTEXT:
-                channelBuilder = new PlaintextChannelBuilder(listenerName);
+                channelBuilder = new PlaintextChannelBuilder(listenerName, time);
                 break;
             default:
                 throw new IllegalArgumentException("Unexpected securityProtocol " + securityProtocol);

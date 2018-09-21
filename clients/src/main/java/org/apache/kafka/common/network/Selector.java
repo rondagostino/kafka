@@ -529,11 +529,22 @@ public class Selector implements Selectable, AutoCloseable {
                     try {
                         channel.prepare();
                     } catch (AuthenticationException e) {
-                        sensors.failedAuthentication.record();
+                        if (channel.successfulAuthentications() == 0)
+                            sensors.failedAuthentication.record();
+//                        else
+//                            sensors.failedAuthentication.record(); // TODO: fixme
                         throw e;
                     }
                     if (channel.ready())
-                        sensors.successfulAuthentication.record();
+                        if (channel.successfulAuthentications() == 1)
+                            sensors.successfulAuthentication.record();
+//                        else
+//                            sensors.successfulAuthentication.record(); // TODO: fixme
+                    Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel
+                            .getAndClearResponsesReceivedDuringReauthentication();
+                    if (responsesReceivedDuringReauthentication != null)
+                        for (NetworkReceive receive : responsesReceivedDuringReauthentication)
+                            addToStagedReceives(channel, receive);
                 }
 
                 attemptRead(key, channel);
@@ -550,16 +561,18 @@ public class Selector implements Selectable, AutoCloseable {
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
                 if (channel.ready() && key.isWritable()) {
-                    Send send;
-                    try {
-                        send = channel.write();
-                    } catch (Exception e) {
-                        sendFailed = true;
-                        throw e;
-                    }
-                    if (send != null) {
-                        this.completedSends.add(send);
-                        this.sensors.recordBytesSent(channel.id(), send.size());
+                    if (!channel.maybeBeginClientReauthentication(time)) {
+                        Send send;
+                        try {
+                            send = channel.write();
+                        } catch (Exception e) {
+                            sendFailed = true;
+                            throw e;
+                        }
+                        if (send != null) {
+                            this.completedSends.add(send);
+                            this.sensors.recordBytesSent(channel.id(), send.size());
+                        }
                     }
                 }
 
@@ -968,6 +981,7 @@ public class Selector implements Selectable, AutoCloseable {
         public final Sensor connectionClosed;
         public final Sensor connectionCreated;
         public final Sensor successfulAuthentication;
+//        public final Sensor successfulAuthentication2;
         public final Sensor failedAuthentication;
         public final Sensor bytesTransferred;
         public final Sensor bytesSent;
@@ -1004,6 +1018,12 @@ public class Selector implements Selectable, AutoCloseable {
             this.successfulAuthentication = sensor("successful-authentication:" + tagsSuffix);
             this.successfulAuthentication.add(createMeter(metrics, metricGrpName, metricTags,
                     "successful-authentication", "connections with successful authentication"));
+
+//            Map<String, String> metricTags2 = new HashMap<>(metricTags);
+//            metricTags2.put("version", "1");
+//            this.successfulAuthentication2 = sensor("successful-authentication:" + tagsSuffix + "version-1");
+//            this.successfulAuthentication2.add(createMeter(metrics, metricGrpName, metricTags2,
+//                    "successful-authentication", "v1 connections with successful authentication"));
 
             this.failedAuthentication = sensor("failed-authentication:" + tagsSuffix);
             this.failedAuthentication.add(createMeter(metrics, metricGrpName, metricTags,

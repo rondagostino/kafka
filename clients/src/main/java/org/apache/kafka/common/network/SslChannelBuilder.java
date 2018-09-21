@@ -18,11 +18,13 @@ package org.apache.kafka.common.network;
 
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.config.SslConfigs;
+import org.apache.kafka.common.errors.IllegalSaslStateException;
 import org.apache.kafka.common.memory.MemoryPool;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.common.security.auth.KafkaPrincipalBuilder;
 import org.apache.kafka.common.security.auth.SslAuthenticationContext;
 import org.apache.kafka.common.security.ssl.SslFactory;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +37,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 public class SslChannelBuilder implements ChannelBuilder, ListenerReconfigurable {
     private static final Logger log = LoggerFactory.getLogger(SslChannelBuilder.class);
@@ -44,15 +47,17 @@ public class SslChannelBuilder implements ChannelBuilder, ListenerReconfigurable
     private SslFactory sslFactory;
     private Mode mode;
     private Map<String, ?> configs;
+    private final Time time;
 
     /**
      * Constructs a SSL channel builder. ListenerName is provided only
      * for server channel builder and will be null for client channel builder.
      */
-    public SslChannelBuilder(Mode mode, ListenerName listenerName, boolean isInterBrokerListener) {
+    public SslChannelBuilder(Mode mode, ListenerName listenerName, boolean isInterBrokerListener, Time time) {
         this.mode = mode;
         this.listenerName = listenerName;
         this.isInterBrokerListener = isInterBrokerListener;
+        this.time = time;
     }
 
     public void configure(Map<String, ?> configs) throws KafkaException {
@@ -89,8 +94,8 @@ public class SslChannelBuilder implements ChannelBuilder, ListenerReconfigurable
     public KafkaChannel buildChannel(String id, SelectionKey key, int maxReceiveSize, MemoryPool memoryPool) throws KafkaException {
         try {
             SslTransportLayer transportLayer = buildTransportLayer(sslFactory, id, key, peerHost(key));
-            Authenticator authenticator = new SslAuthenticator(configs, transportLayer, listenerName);
-            return new KafkaChannel(id, transportLayer, authenticator, maxReceiveSize,
+            Supplier<Authenticator> authenticatorCreator = () -> new SslAuthenticator(configs, transportLayer, listenerName, time);
+            return new KafkaChannel(id, transportLayer, authenticatorCreator, maxReceiveSize,
                     memoryPool != null ? memoryPool : MemoryPool.NONE);
         } catch (Exception e) {
             log.info("Failed to create channel due to ", e);
@@ -153,11 +158,14 @@ public class SslChannelBuilder implements ChannelBuilder, ListenerReconfigurable
         private final SslTransportLayer transportLayer;
         private final KafkaPrincipalBuilder principalBuilder;
         private final ListenerName listenerName;
+        private final Time time;
+        private Long sessionBeginTimeMs = null;
 
-        private SslAuthenticator(Map<String, ?> configs, SslTransportLayer transportLayer, ListenerName listenerName) {
+        private SslAuthenticator(Map<String, ?> configs, SslTransportLayer transportLayer, ListenerName listenerName, Time time) {
             this.transportLayer = transportLayer;
             this.principalBuilder = ChannelBuilders.createPrincipalBuilder(configs, transportLayer, this, null);
             this.listenerName = listenerName;
+            this.time = time;
         }
         /**
          * No-Op for plaintext authenticator
@@ -194,7 +202,16 @@ public class SslChannelBuilder implements ChannelBuilder, ListenerReconfigurable
          */
         @Override
         public boolean complete() {
+            if (sessionBeginTimeMs == null)
+                sessionBeginTimeMs = time.milliseconds();
             return true;
+        }
+
+        @Override
+        public long sessionBeginTimeMs() {
+            if (sessionBeginTimeMs == null)
+                throw new IllegalSaslStateException("Session not yet established: " + getClass().getSimpleName());
+            return sessionBeginTimeMs;
         }
     }
 }

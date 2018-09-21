@@ -32,8 +32,8 @@ import javax.security.auth.spi.LoginModule;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.Login;
-import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
 import org.apache.kafka.common.security.auth.SaslExtensions;
+import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslClientProvider;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslServerProvider;
 import org.slf4j.Logger;
@@ -95,15 +95,20 @@ import org.slf4j.LoggerFactory;
  * </table>
  * <p>
  * <p>
- * You can also add custom unsecured SASL extensions when using the default, builtin {@link AuthenticateCallbackHandler}
- * implementation through using the configurable option {@code unsecuredLoginExtension_<extensionname>}. Note that there
- * are validations for the key/values in order to conform to the SASL/OAUTHBEARER standard
- * (https://tools.ietf.org/html/rfc7628#section-3.1), including the reserved key at
+ * You can also add custom unsecured SASL extensions when using the default,
+ * builtin {@link AuthenticateCallbackHandler} implementation through using the
+ * configurable option {@code unsecuredLoginExtension_<extensionname>}. Note
+ * that there are validations for the key/values in order to conform to the
+ * SASL/OAUTHBEARER standard (https://tools.ietf.org/html/rfc7628#section-3.1),
+ * including the reserved key at
  * {@link org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerClientInitialResponse#AUTH_KEY}.
- * The {@code OAuthBearerLoginModule} instance also asks its configured {@link AuthenticateCallbackHandler}
- * implementation to handle an instance of {@link SaslExtensionsCallback} and return an instance of {@link SaslExtensions}.
- * The configured callback handler does not need to handle this callback, though -- any {@code UnsupportedCallbackException}
- * that is thrown is ignored, and no SASL extensions will be associated with the login.
+ * The {@code OAuthBearerLoginModule} instance also asks its configured
+ * {@link AuthenticateCallbackHandler} implementation to handle an instance of
+ * {@link SaslExtensionsCallback} and return an instance of
+ * {@link SaslExtensions}. The configured callback handler does not need to
+ * handle this callback, though -- any {@code UnsupportedCallbackException} that
+ * is thrown is ignored, and no SASL extensions will be associated with the
+ * login.
  * <p>
  * Production use cases will require writing an implementation of
  * {@link AuthenticateCallbackHandler} that can handle an instance of
@@ -234,6 +239,7 @@ import org.slf4j.LoggerFactory;
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
+ * @see SaslConfigs#SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC
  */
 public class OAuthBearerLoginModule implements LoginModule {
     /**
@@ -277,7 +283,7 @@ public class OAuthBearerLoginModule implements LoginModule {
         identifyToken();
         identifyExtensions();
 
-        log.info("Login succeeded; invoke commit() to commit it; current committed token count={}",
+        log.debug("Login succeeded; invoke commit() to commit it; current committed token count={}",
                 committedTokenCount());
         return true;
     }
@@ -309,13 +315,16 @@ public class OAuthBearerLoginModule implements LoginModule {
             extensionsRequiringCommit = extensionsCallback.extensions();
         } catch (IOException e) {
             log.error(e.getMessage(), e);
-            throw new LoginException("An internal error occurred while retrieving SASL extensions from callback handler");
+            throw new LoginException(
+                    "An internal error occurred while retrieving SASL extensions from callback handler");
         } catch (UnsupportedCallbackException e) {
             extensionsRequiringCommit = EMPTY_EXTENSIONS;
-            log.info("CallbackHandler {} does not support SASL extensions. No extensions will be added", callbackHandler.getClass().getName());
+            log.debug("CallbackHandler {} does not support SASL extensions. No extensions will be added",
+                    callbackHandler.getClass().getName());
         }
-        if (extensionsRequiringCommit ==  null) {
-            log.error("SASL Extensions cannot be null. Check whether your callback handler is explicitly setting them as null.");
+        if (extensionsRequiringCommit == null) {
+            log.error(
+                    "SASL Extensions cannot be null. Check whether your callback handler is explicitly setting them as null.");
             throw new LoginException("Extensions cannot be null.");
         }
     }
@@ -326,11 +335,10 @@ public class OAuthBearerLoginModule implements LoginModule {
             throw new IllegalStateException(
                     "Cannot call logout() immediately after login(); need to first invoke commit() or abort()");
         if (myCommittedToken == null) {
-            if (log.isDebugEnabled())
-                log.debug("Nothing here to log out");
+            log.debug("Nothing here to log out");
             return false;
         }
-        log.info("Logging out my token; current committed token count = {}", committedTokenCount());
+        log.debug("Logging out my token; current committed token count = {}", committedTokenCount());
         for (Iterator<Object> iterator = subject.getPrivateCredentials().iterator(); iterator.hasNext();) {
             Object privateCredential = iterator.next();
             if (privateCredential == myCommittedToken) {
@@ -339,12 +347,12 @@ public class OAuthBearerLoginModule implements LoginModule {
                 break;
             }
         }
-        log.info("Done logging out my token; committed token count is now {}", committedTokenCount());
+        log.debug("Done logging out my token; committed token count is now {}", committedTokenCount());
 
-        log.info("Logging out my extensions");
+        log.debug("Logging out my extensions");
         if (subject.getPublicCredentials().removeIf(e -> myCommittedExtensions == e))
             myCommittedExtensions = null;
-        log.info("Done logging out my extensions");
+        log.debug("Done logging out my extensions");
 
         return true;
     }
@@ -357,11 +365,11 @@ public class OAuthBearerLoginModule implements LoginModule {
             return false;
         }
 
-        log.info("Committing my token; current committed token count = {}", committedTokenCount());
+        log.debug("Committing my token; current committed token count = {}", committedTokenCount());
         subject.getPrivateCredentials().add(tokenRequiringCommit);
         myCommittedToken = tokenRequiringCommit;
         tokenRequiringCommit = null;
-        log.info("Done committing my token; committed token count is now {}", committedTokenCount());
+        log.debug("Done committing my token; committed token count is now {}", committedTokenCount());
 
         subject.getPublicCredentials().add(extensionsRequiringCommit);
         myCommittedExtensions = extensionsRequiringCommit;
@@ -373,13 +381,12 @@ public class OAuthBearerLoginModule implements LoginModule {
     @Override
     public boolean abort() {
         if (tokenRequiringCommit != null) {
-            log.info("Login aborted");
+            log.debug("Login aborted");
             tokenRequiringCommit = null;
             extensionsRequiringCommit = null;
             return true;
         }
-        if (log.isDebugEnabled())
-            log.debug("Nothing here to abort");
+        log.debug("Nothing here to abort");
         return false;
     }
 

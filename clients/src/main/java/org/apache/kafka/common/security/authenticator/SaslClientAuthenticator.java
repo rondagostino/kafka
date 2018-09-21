@@ -25,6 +25,7 @@ import org.apache.kafka.common.errors.SaslAuthenticationException;
 import org.apache.kafka.common.errors.UnsupportedSaslMechanismException;
 import org.apache.kafka.common.network.Authenticator;
 import org.apache.kafka.common.network.NetworkSend;
+import org.apache.kafka.common.network.ReauthenticationContext;
 import org.apache.kafka.common.network.NetworkReceive;
 import org.apache.kafka.common.network.Send;
 import org.apache.kafka.common.network.TransportLayer;
@@ -43,6 +44,7 @@ import org.apache.kafka.common.requests.SaslHandshakeResponse;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.common.security.kerberos.KerberosError;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,23 +59,27 @@ import java.nio.channels.SelectionKey;
 import java.security.Principal;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Date;
+import java.util.Deque;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 public class SaslClientAuthenticator implements Authenticator {
 
     public enum SaslState {
-        SEND_APIVERSIONS_REQUEST,     // Initial state: client sends ApiVersionsRequest in this state
-        RECEIVE_APIVERSIONS_RESPONSE, // Awaiting ApiVersionsResponse from server
-        SEND_HANDSHAKE_REQUEST,       // Received ApiVersionsResponse, send SaslHandshake request
-        RECEIVE_HANDSHAKE_RESPONSE,   // Awaiting SaslHandshake request from server
-        INITIAL,                      // Initial state starting SASL token exchange for configured mechanism, send first token
-        INTERMEDIATE,                 // Intermediate state during SASL token exchange, process challenges and send responses
-        CLIENT_COMPLETE,              // Sent response to last challenge. If using SaslAuthenticate, wait for authentication status from server, else COMPLETE
-        COMPLETE,                     // Authentication sequence complete. If using SaslAuthenticate, this state implies successful authentication.
-        FAILED                        // Failed authentication due to an error at some stage
+        SEND_APIVERSIONS_REQUEST,            // Initial state: client sends ApiVersionsRequest in this state when authenticating
+        RECEIVE_APIVERSIONS_RESPONSE,        // Awaiting ApiVersionsResponse from server
+        SEND_HANDSHAKE_REQUEST,              // Received ApiVersionsResponse, send SaslHandshake request (re-authentication starts here)
+        RECEIVE_HANDSHAKE_OR_OTHER_RESPONSE, // Awaiting SaslHandshake response from server (may receive other, in-flight responses as well when re-authenticating)
+        INITIAL,                             // Initial state starting SASL token exchange for configured mechanism, send first token
+        INTERMEDIATE,                        // Intermediate state during SASL token exchange, process challenges and send responses
+        CLIENT_COMPLETE,                     // Sent response to last challenge. If using SaslAuthenticate, wait for authentication status from server, else COMPLETE
+        COMPLETE,                            // Authentication sequence complete. If using SaslAuthenticate, this state implies successful authentication.
+        FAILED                               // Failed authentication due to an error at some stage
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(SaslClientAuthenticator.class);
@@ -104,6 +110,13 @@ public class SaslClientAuthenticator implements Authenticator {
     private RequestHeader currentRequestHeader;
     // Version of SaslAuthenticate request/responses
     private short saslAuthenticateVersion;
+    private Deque<NetworkReceive> pendingAuthenticatedReceives = new ArrayDeque<>();
+    private ApiVersionsResponse apiVersionsResponse = null;
+    private Long sessionExpirationTimeMs = null;
+    private boolean reauthenticating = false;
+    private boolean interestedInWritingImmediatelyAfterReauthentication = false;
+    private final Time time;
+    private Long sessionBeginTimeMs = null;
 
     public SaslClientAuthenticator(Map<String, ?> configs,
                                    AuthenticateCallbackHandler callbackHandler,
@@ -113,7 +126,8 @@ public class SaslClientAuthenticator implements Authenticator {
                                    String host,
                                    String mechanism,
                                    boolean handshakeRequestEnable,
-                                   TransportLayer transportLayer) {
+                                   TransportLayer transportLayer,
+                                   Time time) {
         this.node = node;
         this.subject = subject;
         this.callbackHandler = callbackHandler;
@@ -140,6 +154,7 @@ public class SaslClientAuthenticator implements Authenticator {
         } catch (Exception e) {
             throw new SaslAuthenticationException("Failed to configure SaslClientAuthenticator", e);
         }
+        this.time = time;
     }
 
     private SaslClient createSaslClient() {
@@ -169,13 +184,17 @@ public class SaslClientAuthenticator implements Authenticator {
 
         switch (saslState) {
             case SEND_APIVERSIONS_REQUEST:
-                // Always use version 0 request since brokers treat requests with schema exceptions as GSSAPI tokens
-                ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest((short) 0);
-                send(apiVersionsRequest.toSend(node, nextRequestHeader(ApiKeys.API_VERSIONS, apiVersionsRequest.version())));
-                setSaslState(SaslState.RECEIVE_APIVERSIONS_RESPONSE);
-                break;
+                if (this.apiVersionsResponse == null) {
+                    // Always use version 0 request since brokers treat requests with schema exceptions as GSSAPI tokens
+                    ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest((short) 0);
+                    send(apiVersionsRequest.toSend(node, nextRequestHeader(ApiKeys.API_VERSIONS, apiVersionsRequest.version())));
+                    setSaslState(SaslState.RECEIVE_APIVERSIONS_RESPONSE);
+                    break;
+                } else
+                    setSaslState(SaslState.RECEIVE_APIVERSIONS_RESPONSE); // fall through
             case RECEIVE_APIVERSIONS_RESPONSE:
-                ApiVersionsResponse apiVersionsResponse = (ApiVersionsResponse) receiveKafkaResponse();
+                ApiVersionsResponse apiVersionsResponse = this.apiVersionsResponse != null ? this.apiVersionsResponse
+                        : (ApiVersionsResponse) receiveKafkaResponse();
                 if (apiVersionsResponse == null)
                     break;
                 else {
@@ -184,14 +203,15 @@ public class SaslClientAuthenticator implements Authenticator {
                     if (authenticateVersion != null)
                         saslAuthenticateVersion((short) Math.min(authenticateVersion.maxVersion, ApiKeys.SASL_AUTHENTICATE.latestVersion()));
                     setSaslState(SaslState.SEND_HANDSHAKE_REQUEST);
+                    this.apiVersionsResponse = apiVersionsResponse;
                     // Fall through to send handshake request with the latest supported version
                 }
             case SEND_HANDSHAKE_REQUEST:
                 SaslHandshakeRequest handshakeRequest = createSaslHandshakeRequest(saslHandshakeVersion);
                 send(handshakeRequest.toSend(node, nextRequestHeader(ApiKeys.SASL_HANDSHAKE, handshakeRequest.version())));
-                setSaslState(SaslState.RECEIVE_HANDSHAKE_RESPONSE);
+                setSaslState(SaslState.RECEIVE_HANDSHAKE_OR_OTHER_RESPONSE);
                 break;
-            case RECEIVE_HANDSHAKE_RESPONSE:
+            case RECEIVE_HANDSHAKE_OR_OTHER_RESPONSE:
                 SaslHandshakeResponse handshakeResponse = (SaslHandshakeResponse) receiveKafkaResponse();
                 if (handshakeResponse == null)
                     break;
@@ -214,6 +234,10 @@ public class SaslClientAuthenticator implements Authenticator {
                         setSaslState(SaslState.COMPLETE);
                     else
                         setSaslState(SaslState.CLIENT_COMPLETE);
+                    sessionBeginTimeMs = time.milliseconds();
+                    LOG.debug("{} at {} with {}", reauthenticating ? "Re-authenticated" : "Authenticated",
+                            new Date(sessionBeginTimeMs), sessionExpirationTimeMs == null ? "no session expiration"
+                                    : ("session expiration " + new Date(sessionExpirationTimeMs.longValue())));
                 }
                 break;
             case CLIENT_COMPLETE:
@@ -227,6 +251,43 @@ public class SaslClientAuthenticator implements Authenticator {
                 // Should never get here since exception would have been propagated earlier
                 throw new IllegalStateException("SASL handshake has already failed");
         }
+    }
+
+    @Override
+    public boolean supportsClientReauth() {
+        return true;
+    }
+
+    @Override
+    public void reauthenticate(ReauthenticationContext reauthenticationContext) throws IOException {
+        Authenticator previousAuthenticator = Objects.requireNonNull(reauthenticationContext).previousAuthenticator();
+        if (!(previousAuthenticator instanceof SaslClientAuthenticator))
+            throw new IllegalArgumentException(
+                    "Invalid previous authenticator in client-side re-authentication context: " + previousAuthenticator);
+        apiVersionsResponse = ((SaslClientAuthenticator) previousAuthenticator).apiVersionsResponse;
+        netInBuffer = reauthenticationContext.inProgressResponse();
+        reauthenticating = true;
+        interestedInWritingImmediatelyAfterReauthentication = transportLayer.selectionKey().isWritable();
+        authenticate();
+    }
+
+    @Override
+    public Deque<NetworkReceive> getAndClearResponsesReceivedDuringReauthentication() {
+        Deque<NetworkReceive> retval = pendingAuthenticatedReceives;
+        pendingAuthenticatedReceives = new ArrayDeque<>();
+        return retval;
+    }
+
+    @Override
+    public Long sessionExpirationTimeMs() {
+        return sessionExpirationTimeMs;
+    }
+
+    @Override
+    public long sessionBeginTimeMs() {
+        if (sessionBeginTimeMs == null)
+            throw new IllegalStateException("Session not yet established: " + getClass().getSimpleName());
+        return sessionBeginTimeMs.longValue();
     }
 
     private RequestHeader nextRequestHeader(ApiKeys apiKey, short version) {
@@ -253,7 +314,10 @@ public class SaslClientAuthenticator implements Authenticator {
             this.saslState = saslState;
             LOG.debug("Set SASL client state to {}", saslState);
             if (saslState == SaslState.COMPLETE)
-                transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
+                if (interestedInWritingImmediatelyAfterReauthentication)
+                    transportLayer.addInterestOps(SelectionKey.OP_WRITE);
+                else
+                    transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
         }
     }
 
@@ -299,17 +363,25 @@ public class SaslClientAuthenticator implements Authenticator {
         return flushedCompletely;
     }
 
-    private byte[] receiveResponseOrToken() throws IOException {
+    private NetworkReceive receivePacket() throws IOException {
         if (netInBuffer == null) netInBuffer = new NetworkReceive(node);
         netInBuffer.readFrom(transportLayer);
-        byte[] serverPacket = null;
+        NetworkReceive retval = null;
         if (netInBuffer.complete()) {
             netInBuffer.payload().rewind();
-            serverPacket = new byte[netInBuffer.payload().remaining()];
-            netInBuffer.payload().get(serverPacket, 0, serverPacket.length);
+            retval = netInBuffer;
             netInBuffer = null; // reset the networkReceive as we read all the data.
         }
-        return serverPacket;
+        return retval;
+    }
+
+    private byte[] receiveResponseOrToken() throws IOException {
+        NetworkReceive receive = receivePacket();
+        if (receive == null)
+            return null;
+        byte[] retval = new byte[receive.payload().remaining()];
+        receive.payload().get(retval, 0, retval.length);
+        return retval;
     }
 
     public KafkaPrincipal principal() {
@@ -336,6 +408,18 @@ public class SaslClientAuthenticator implements Authenticator {
                     setSaslState(SaslState.FAILED);
                     String errMsg = response.errorMessage();
                     throw errMsg == null ? error.exception() : error.exception(errMsg);
+                }
+                long sessionReauthMs = response.sessionReauthMs();
+                if (sessionReauthMs > 0L) {
+                    long nowOnClient = time.milliseconds();
+                    /*
+                     * Client time is of course not perfectly synchronized with server time, and
+                     * there is also some inherent latency due to the fact that the successful
+                     * authentication message has to traverse the network, so anyone using the
+                     * published time must take into account both the possibility of clock drift and
+                     * latency.
+                     */
+                    sessionExpirationTimeMs = nowOnClient + sessionReauthMs;
                 }
                 return Utils.readBytes(response.saslAuthBytes());
             } else
@@ -384,19 +468,33 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     private AbstractResponse receiveKafkaResponse() throws IOException {
+        NetworkReceive receive = receivePacket();
+        if (receive == null)
+            return null;
+        byte[] responseBytes = new byte[receive.payload().remaining()];
+        receive.payload().get(responseBytes, 0, responseBytes.length);
+        /*
+         * Account for the fact that during re-authentication there may be responses
+         * arriving for requests that were sent in the past
+         */
         try {
-            byte[] responseBytes = receiveResponseOrToken();
-            if (responseBytes == null)
-                return null;
-            else {
-                AbstractResponse response = NetworkClient.parseResponse(ByteBuffer.wrap(responseBytes), currentRequestHeader);
-                currentRequestHeader = null;
-                return response;
-            }
+            AbstractResponse response = NetworkClient.parseResponse(ByteBuffer.wrap(responseBytes), currentRequestHeader);
+            currentRequestHeader = null;
+            return response;
         } catch (SchemaException | IllegalArgumentException e) {
-            LOG.debug("Invalid SASL mechanism response, server may be expecting only GSSAPI tokens");
-            setSaslState(SaslState.FAILED);
-            throw new IllegalSaslStateException("Invalid SASL mechanism response, server may be expecting a different protocol", e);
+            if (reauthenticating) {
+                /*
+                 * It didn't match the current request header, so it must be unrelated to
+                 * re-authentication. Save it so it can be processed later.
+                 */
+                receive.payload().rewind();
+                pendingAuthenticatedReceives.add(receive);
+                return null;
+            } else {
+                LOG.debug("Invalid SASL mechanism response, server may be expecting only GSSAPI tokens");
+                setSaslState(SaslState.FAILED);
+                throw new IllegalSaslStateException("Invalid SASL mechanism response, server may be expecting a different protocol", e);
+            }
         }
     }
 

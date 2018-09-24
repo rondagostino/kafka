@@ -46,6 +46,7 @@ import org.apache.kafka.common.requests.SaslAuthenticateRequest;
 import org.apache.kafka.common.requests.SaslAuthenticateResponse;
 import org.apache.kafka.common.requests.SaslHandshakeRequest;
 import org.apache.kafka.common.requests.SaslHandshakeResponse;
+import org.apache.kafka.common.security.JaasUtils;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.common.security.auth.KafkaPrincipalBuilder;
@@ -55,6 +56,7 @@ import org.apache.kafka.common.security.kerberos.KerberosName;
 import org.apache.kafka.common.security.kerberos.KerberosShortNamer;
 import org.apache.kafka.common.security.scram.ScramLoginModule;
 import org.apache.kafka.common.security.scram.internals.ScramMechanism;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
@@ -126,6 +128,7 @@ public class SaslServerAuthenticator implements Authenticator {
     // flag indicating if sasl tokens are sent as Kafka SaslAuthenticate request/responses
     private boolean enableKafkaSaslAuthenticateHeaders;
     private boolean reauthenticating = false;
+    private final Time time;
 
     public SaslServerAuthenticator(Map<String, ?> configs,
                                    Map<String, AuthenticateCallbackHandler> callbackHandlers,
@@ -135,7 +138,8 @@ public class SaslServerAuthenticator implements Authenticator {
                                    ListenerName listenerName,
                                    SecurityProtocol securityProtocol,
                                    TransportLayer transportLayer,
-                                   Map<String, Long> connectionsMaxReauthMsByMechanism) {
+                                   Map<String, Long> connectionsMaxReauthMsByMechanism,
+                                   Time time) {
         this.callbackHandlers = callbackHandlers;
         this.connectionId = connectionId;
         this.subjects = subjects;
@@ -144,6 +148,7 @@ public class SaslServerAuthenticator implements Authenticator {
         this.enableKafkaSaslAuthenticateHeaders = false;
         this.transportLayer = transportLayer;
         this.connectionsMaxReauthMsByMechanism = connectionsMaxReauthMsByMechanism;
+        this.time = time;
 
         this.configs = configs;
         @SuppressWarnings("unchecked")
@@ -420,15 +425,17 @@ public class SaslServerAuthenticator implements Authenticator {
                 ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
                 long sessionReauthMs = 0L;
                 if (saslServer.isComplete()) {
-                    Long saslServerSessionReauthMs = (Long) saslServer.getNegotiatedProperty("SESSION_REAUTH_MS");
+                    Long saslServerConectionLifetimeMs = (Long) saslServer
+                            .getNegotiatedProperty(JaasUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
                     Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
-                    if (saslServerSessionReauthMs != null || connectionsMaxReauthMs != null) {
-                        if (saslServerSessionReauthMs == null)
+                    if (saslServerConectionLifetimeMs != null || connectionsMaxReauthMs != null) {
+                        if (saslServerConectionLifetimeMs == null)
                             sessionReauthMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
                         else if (connectionsMaxReauthMs == null)
-                            sessionReauthMs = zeroIfNegative(saslServerSessionReauthMs.longValue());
+                            sessionReauthMs = zeroIfNegative(
+                                    saslServerConectionLifetimeMs.longValue() - time.milliseconds());
                         else
-                            sessionReauthMs = Math.min(zeroIfNegative(saslServerSessionReauthMs.longValue()),
+                            sessionReauthMs = Math.min(saslServerConectionLifetimeMs.longValue() - time.milliseconds(),
                                     zeroIfNegative(connectionsMaxReauthMs.longValue()));
                     }
                 }

@@ -19,6 +19,7 @@ package org.apache.kafka.common.security;
 import javax.security.auth.login.Configuration;
 
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.config.internals.BrokerSecurityConfigs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,6 +31,22 @@ public final class JaasUtils {
 
     public static final String ZK_SASL_CLIENT = "zookeeper.sasl.client";
     public static final String ZK_LOGIN_CONTEXT_NAME_KEY = "zookeeper.sasl.clientconfig";
+    
+    /**
+     * The server (broker) specifies a positive session length in milliseconds to a
+     * SASL client when {@link BrokerSecurityConfigs#CONNECTIONS_MAX_REAUTH_MS} is
+     * positive as per <a href=
+     * "https://cwiki.apache.org/confluence/display/KAFKA/KIP-368%3A+Allow+SASL+Connections+to+Periodically+Re-Authenticate">KIP
+     * 368: Allow SASL Connections to Periodically Re-Authenticate</a>. The session
+     * length is the minimum of the configured value and any session length implied
+     * by the credential presented during authentication. The lifetime defined by
+     * the credential, in terms of milliseconds since the epoch, is available via a
+     * negotiated property on the SASL Server instance, and that value can be
+     * converted to a session length by subtracting the time at which authentication
+     * occurred. This value is the negotiated property key that is used to
+     * communicate the credential lifetime in milliseconds since the epoch.
+     */
+    public static final String CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY = "CREDENTIAL.LIFETIME.MS";
 
     private JaasUtils() {}
 

@@ -1287,7 +1287,7 @@ public class SaslAuthenticatorTest {
                                                                        TransportLayer transportLayer,
                                                                        Map<String, Subject> subjects,
                                                                        Map<String, Long> connectionsMaxReauthMsByMechanism) {
-                return new SaslServerAuthenticator(configs, callbackHandlers, id, subjects, null, listenerName, securityProtocol, transportLayer, connectionsMaxReauthMsByMechanism) {
+                return new SaslServerAuthenticator(configs, callbackHandlers, id, subjects, null, listenerName, securityProtocol, transportLayer, connectionsMaxReauthMsByMechanism, time) {
 
                     @Override
                     protected ApiVersionsResponse apiVersionsResponse() {

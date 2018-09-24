@@ -240,7 +240,7 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
                                                                Map<String, Subject> subjects,
                                                                Map<String, Long> connectionsMaxReauthMsByMechanism) {
         return new SaslServerAuthenticator(configs, callbackHandlers, id, subjects,
-                kerberosShortNamer, listenerName, securityProtocol, transportLayer, connectionsMaxReauthMsByMechanism);
+                kerberosShortNamer, listenerName, securityProtocol, transportLayer, connectionsMaxReauthMsByMechanism, time);
     }
 
     // Visible to override for testing

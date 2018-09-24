@@ -78,6 +78,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -418,27 +419,12 @@ public class SaslServerAuthenticator implements Authenticator {
                 throw new UnsupportedVersionException("Version " + version + " is not supported for apiKey " + apiKey);
             }
             SaslAuthenticateRequest saslAuthenticateRequest = (SaslAuthenticateRequest) requestAndSize.request;
-
+    
             try {
                 byte[] responseToken = saslServer.evaluateResponse(Utils.readBytes(saslAuthenticateRequest.saslAuthBytes()));
                 // For versions with SASL_AUTHENTICATE header, send a response to SASL_AUTHENTICATE request even if token is empty.
                 ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
-                long sessionReauthMs = 0L;
-                if (saslServer.isComplete()) {
-                    Long saslServerConectionLifetimeMs = (Long) saslServer
-                            .getNegotiatedProperty(JaasUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
-                    Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
-                    if (saslServerConectionLifetimeMs != null || connectionsMaxReauthMs != null) {
-                        if (saslServerConectionLifetimeMs == null)
-                            sessionReauthMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
-                        else if (connectionsMaxReauthMs == null)
-                            sessionReauthMs = zeroIfNegative(
-                                    saslServerConectionLifetimeMs.longValue() - time.milliseconds());
-                        else
-                            sessionReauthMs = Math.min(saslServerConectionLifetimeMs.longValue() - time.milliseconds(),
-                                    zeroIfNegative(connectionsMaxReauthMs.longValue()));
-                    }
-                }
+                long sessionReauthMs = calcSessionReauthMs();
                 sendKafkaResponse(requestContext, new SaslAuthenticateResponse(Errors.NONE, null, responseBuf, sessionReauthMs));
             } catch (SaslAuthenticationException e) {
                 buildResponseOnAuthenticateFailure(requestContext,
@@ -457,6 +443,36 @@ public class SaslServerAuthenticator implements Authenticator {
                 }
             }
         }
+    }
+
+    private long calcSessionReauthMs() {
+        long retvalSessionReauthMs = 0L;
+        if (saslServer.isComplete()) {
+            long authenticationTimeMs = time.milliseconds();
+            Long saslServerConectionLifetimeMs = (Long) saslServer
+                    .getNegotiatedProperty(JaasUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
+            Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
+            if (saslServerConectionLifetimeMs != null || connectionsMaxReauthMs != null) {
+                if (saslServerConectionLifetimeMs == null)
+                    retvalSessionReauthMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
+                else if (connectionsMaxReauthMs == null)
+                    retvalSessionReauthMs = zeroIfNegative(
+                            saslServerConectionLifetimeMs.longValue() - authenticationTimeMs);
+                else
+                    retvalSessionReauthMs = zeroIfNegative(
+                            Math.min(saslServerConectionLifetimeMs.longValue() - authenticationTimeMs,
+                                    connectionsMaxReauthMs.longValue()));
+            }
+            LOG.debug(
+                    "Authentication complete; session lifetime from broker config={} ms, credential expiration={} ({} ms), sending {} ms to client",
+                    connectionsMaxReauthMs,
+                    saslServerConectionLifetimeMs != null ? new Date(saslServerConectionLifetimeMs) : null,
+                    saslServerConectionLifetimeMs != null
+                            ? Long.valueOf(saslServerConectionLifetimeMs.longValue() - authenticationTimeMs)
+                            : null,
+                    retvalSessionReauthMs);
+        }
+        return retvalSessionReauthMs;
     }
 
     private static long zeroIfNegative(long value) {

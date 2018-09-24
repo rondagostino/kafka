@@ -531,15 +531,15 @@ public class Selector implements Selectable, AutoCloseable {
                     } catch (AuthenticationException e) {
                         if (channel.successfulAuthentications() == 0)
                             sensors.failedAuthentication.record();
-//                        else
-//                            sensors.failedAuthentication.record(); // TODO: fixme
+                        else
+                            sensors.failedReauthentication.record();
                         throw e;
                     }
                     if (channel.ready())
                         if (channel.successfulAuthentications() == 1)
                             sensors.successfulAuthentication.record();
-//                        else
-//                            sensors.successfulAuthentication.record(); // TODO: fixme
+                        else
+                            sensors.successfulReauthentication.record();
                     Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel
                             .getAndClearResponsesReceivedDuringReauthentication();
                     if (responsesReceivedDuringReauthentication != null)
@@ -981,8 +981,9 @@ public class Selector implements Selectable, AutoCloseable {
         public final Sensor connectionClosed;
         public final Sensor connectionCreated;
         public final Sensor successfulAuthentication;
-//        public final Sensor successfulAuthentication2;
+        public final Sensor successfulReauthentication;
         public final Sensor failedAuthentication;
+        public final Sensor failedReauthentication;
         public final Sensor bytesTransferred;
         public final Sensor bytesSent;
         public final Sensor bytesReceived;
@@ -1019,15 +1020,17 @@ public class Selector implements Selectable, AutoCloseable {
             this.successfulAuthentication.add(createMeter(metrics, metricGrpName, metricTags,
                     "successful-authentication", "connections with successful authentication"));
 
-//            Map<String, String> metricTags2 = new HashMap<>(metricTags);
-//            metricTags2.put("version", "1");
-//            this.successfulAuthentication2 = sensor("successful-authentication:" + tagsSuffix + "version-1");
-//            this.successfulAuthentication2.add(createMeter(metrics, metricGrpName, metricTags2,
-//                    "successful-authentication", "v1 connections with successful authentication"));
+            this.successfulReauthentication = sensor("successful-reauthentication:" + tagsSuffix);
+            this.successfulReauthentication.add(createMeter(metrics, metricGrpName, metricTags,
+                    "successful-reauthentication", "successful re-authentication of connections"));
 
             this.failedAuthentication = sensor("failed-authentication:" + tagsSuffix);
             this.failedAuthentication.add(createMeter(metrics, metricGrpName, metricTags,
                     "failed-authentication", "connections with failed authentication"));
+
+            this.failedReauthentication = sensor("failed-reauthentication:" + tagsSuffix);
+            this.failedReauthentication.add(createMeter(metrics, metricGrpName, metricTags,
+                    "failed-reauthentication", "failed re-authentication of connections"));
 
             this.bytesTransferred = sensor("bytes-sent-received:" + tagsSuffix);
             bytesTransferred.add(createMeter(metrics, metricGrpName, metricTags, new Count(),

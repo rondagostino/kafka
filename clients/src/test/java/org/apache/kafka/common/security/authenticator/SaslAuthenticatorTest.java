@@ -23,6 +23,7 @@ import java.nio.channels.SelectionKey;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -87,6 +88,7 @@ import org.apache.kafka.common.security.scram.internals.ScramFormatter;
 import org.apache.kafka.common.security.scram.ScramLoginModule;
 import org.apache.kafka.common.security.scram.internals.ScramMechanism;
 import org.apache.kafka.common.security.token.delegation.TokenInformation;
+import org.apache.kafka.common.security.token.delegation.internals.DelegationTokenCache;
 import org.apache.kafka.common.utils.SecurityUtils;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.authenticator.TestDigestLoginModule.DigestServerCallbackHandler;
@@ -96,6 +98,8 @@ import org.apache.kafka.common.utils.Time;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -105,8 +109,10 @@ import static org.junit.Assert.fail;
 /**
  * Tests for the Sasl authenticator. These use a test harness that runs a simple socket server that echos back responses.
  */
+@RunWith(value = Parameterized.class)
 public class SaslAuthenticatorTest {
 
+    private static final long CONNECTIONS_MAX_REAUTH_MS_VALUE = 50L;
     private static final int BUFFER_SIZE = 4 * 1024;
     private static Time time = Time.SYSTEM;
 
@@ -119,6 +125,16 @@ public class SaslAuthenticatorTest {
     private Map<String, Object> saslServerConfigs;
     private CredentialCache credentialCache;
     private int nextCorrelationId;
+    private final boolean waitAndReauthenticate;
+
+    public SaslAuthenticatorTest(boolean waitAndReauthenticate) {
+        this.waitAndReauthenticate = waitAndReauthenticate;
+    }
+
+    @Parameterized.Parameters(name = "reauthenticate={0}")
+    public static Collection<Object[]> data() {
+        return Arrays.asList(new Object[] {Boolean.TRUE}, new Object[] {Boolean.FALSE});
+    }
 
     @Before
     public void setup() throws Exception {
@@ -151,6 +167,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnection(securityProtocol, node);
         server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
     }
 
     /**
@@ -165,6 +182,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnection(securityProtocol, node);
         server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
     }
 
     /**
@@ -181,6 +199,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "PLAIN",
                 "Authentication failed: Invalid username or password");
         server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
     }
 
     /**
@@ -197,6 +216,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "PLAIN",
                 "Authentication failed: Invalid username or password");
         server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
     }
 
     /**
@@ -301,6 +321,7 @@ public class SaslAuthenticatorTest {
         updateScramCredentialCache(TestJaasConfig.USERNAME, TestJaasConfig.PASSWORD);
         createAndCheckClientConnection(securityProtocol, "0");
         server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
     }
 
     /**
@@ -337,6 +358,7 @@ public class SaslAuthenticatorTest {
         updateScramCredentialCache(TestJaasConfig.USERNAME, TestJaasConfig.PASSWORD);
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
         server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
     }
 
     /**
@@ -356,6 +378,7 @@ public class SaslAuthenticatorTest {
         updateScramCredentialCache(TestJaasConfig.USERNAME, TestJaasConfig.PASSWORD);
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
         server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
     }
 
     /**
@@ -374,10 +397,12 @@ public class SaslAuthenticatorTest {
         saslClientConfigs.put(SaslConfigs.SASL_MECHANISM, "SCRAM-SHA-256");
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
         server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
 
         saslClientConfigs.put(SaslConfigs.SASL_MECHANISM, "SCRAM-SHA-512");
         createAndCheckClientConnection(securityProtocol, "2");
         server.verifyAuthenticationMetrics(1, 1);
+        server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
     }
 
     /**
@@ -419,6 +444,8 @@ public class SaslAuthenticatorTest {
 
         //Check invalid tokenId/tokenInfo in tokenCache
         createAndCheckClientConnectionFailure(securityProtocol, "0");
+        server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
 
         //Check valid token Info and invalid credentials
         KafkaPrincipal owner = SecurityUtils.parseKafkaPrincipal("User:Owner");
@@ -427,10 +454,65 @@ public class SaslAuthenticatorTest {
             System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
         server.tokenCache().addToken(tokenId, tokenInfo);
         createAndCheckClientConnectionFailure(securityProtocol, "0");
+        server.verifyAuthenticationMetrics(0, 2);
+        server.verifyReauthenticationMetrics(0, 0);
 
         //Check with valid token Info and credentials
         updateTokenCredentialCache(tokenId, tokenHmac);
         createAndCheckClientConnection(securityProtocol, "0");
+        server.verifyAuthenticationMetrics(1, 2);
+        server.verifyReauthenticationMetrics(0, 0); // token expiration prevents re-authentication
+    }
+
+    @Test
+    public void testTokenReauthenticationOverSaslScram() throws Exception {
+        SecurityProtocol securityProtocol = SecurityProtocol.SASL_SSL;
+        TestJaasConfig jaasConfig = configureMechanisms("SCRAM-SHA-256", Arrays.asList("SCRAM-SHA-256"));
+
+        // create jaas config for token auth
+        Map<String, Object> options = new HashMap<>();
+        String tokenId = "token1";
+        String tokenHmac = "abcdefghijkl";
+        options.put("username", tokenId); // tokenId
+        options.put("password", tokenHmac); // token hmac
+        options.put(ScramLoginModule.TOKEN_AUTH_CONFIG, "true"); // enable token authentication
+        jaasConfig.createOrUpdateEntry(TestJaasConfig.LOGIN_CONTEXT_CLIENT, ScramLoginModule.class.getName(), options);
+
+        // ensure re-authentication based on token expiry rather than a default value
+        saslServerConfigs.put(BrokerSecurityConfigs.CONNECTIONS_MAX_REAUTH_MS, Long.MAX_VALUE);
+        /*
+         * create a token cache that adjusts the token expiration dynamically so that
+         * the first time the expiry is read during authentication we use it to define a session
+         * expiration time that we can then sleep through in the call to
+         * createAndCheckClientConnection(); and then the second time the value is read (during re-authentication) 
+         * it will be in the future.
+         */
+        DelegationTokenCache tokenCache = new DelegationTokenCache(ScramMechanism.mechanismNames()) {
+            int callNum = 0;
+
+            @Override
+            public TokenInformation token(String tokenId) {
+                ++callNum;
+                TokenInformation baseTokenInfo = super.token(tokenId);
+                long now = System.currentTimeMillis();
+                TokenInformation retvalTokenInfo = new TokenInformation(baseTokenInfo.tokenId(), baseTokenInfo.owner(),
+                        baseTokenInfo.renewers(), baseTokenInfo.issueTimestamp(),
+                        now + callNum * CONNECTIONS_MAX_REAUTH_MS_VALUE,
+                        now + callNum * CONNECTIONS_MAX_REAUTH_MS_VALUE);
+                return retvalTokenInfo;
+            }
+        };
+        server = createEchoServer(ListenerName.forSecurityProtocol(securityProtocol), securityProtocol, tokenCache);
+
+        KafkaPrincipal owner = SecurityUtils.parseKafkaPrincipal("User:Owner");
+        KafkaPrincipal renewer = SecurityUtils.parseKafkaPrincipal("User:Renewer1");
+        TokenInformation tokenInfo = new TokenInformation(tokenId, owner, Collections.singleton(renewer),
+                System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
+        server.tokenCache().addToken(tokenId, tokenInfo);
+        updateTokenCredentialCache(tokenId, tokenHmac);
+        createAndCheckClientConnection(securityProtocol, "0");
+        server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
     }
 
     /**
@@ -915,6 +997,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnectionFailure(securityProtocol, node);
         server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
     }
 
     /**
@@ -930,6 +1013,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnectionFailure(securityProtocol, node);
         server.verifyAuthenticationMetrics(0, 1);
+        server.verifyReauthenticationMetrics(0, 0);
     }
 
     /**
@@ -1433,6 +1517,7 @@ public class SaslAuthenticatorTest {
     private TestJaasConfig configureMechanisms(String clientMechanism, List<String> serverMechanisms) {
         saslClientConfigs.put(SaslConfigs.SASL_MECHANISM, clientMechanism);
         saslServerConfigs.put(BrokerSecurityConfigs.SASL_ENABLED_MECHANISMS_CONFIG, serverMechanisms);
+        saslServerConfigs.put(BrokerSecurityConfigs.CONNECTIONS_MAX_REAUTH_MS, CONNECTIONS_MAX_REAUTH_MS_VALUE);
         if (serverMechanisms.contains("DIGEST-MD5")) {
             saslServerConfigs.put("digest-md5." + BrokerSecurityConfigs.SASL_SERVER_CALLBACK_HANDLER_CLASS,
                     TestDigestLoginModule.DigestServerCallbackHandler.class.getName());
@@ -1467,6 +1552,12 @@ public class SaslAuthenticatorTest {
                 new TestSecurityConfig(saslServerConfigs), credentialCache, time);
     }
 
+    private NioEchoServer createEchoServer(ListenerName listenerName, SecurityProtocol securityProtocol,
+            DelegationTokenCache tokenCache) throws Exception {
+        return NetworkTestUtils.createEchoServer(listenerName, securityProtocol,
+                new TestSecurityConfig(saslServerConfigs), credentialCache, 100, time, tokenCache);
+    }
+
     private void createClientConnection(SecurityProtocol securityProtocol, String node) throws Exception {
         createSelector(securityProtocol, saslClientConfigs);
         InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
@@ -1476,6 +1567,11 @@ public class SaslAuthenticatorTest {
     private void createAndCheckClientConnection(SecurityProtocol securityProtocol, String node) throws Exception {
         createClientConnection(securityProtocol, node);
         NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
+        if (waitAndReauthenticate) {
+            Thread.sleep((long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1));
+            NetworkTestUtils.waitForChannelReady(selector, node);
+            NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
+        }
         selector.close();
         selector = null;
     }

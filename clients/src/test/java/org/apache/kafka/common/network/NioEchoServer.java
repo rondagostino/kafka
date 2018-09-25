@@ -76,6 +76,13 @@ public class NioEchoServer extends Thread {
     public NioEchoServer(ListenerName listenerName, SecurityProtocol securityProtocol, AbstractConfig config,
                          String serverHost, ChannelBuilder channelBuilder, CredentialCache credentialCache,
                          int failedAuthenticationDelayMs, Time time) throws Exception {
+        this(listenerName, securityProtocol, config, serverHost, channelBuilder, credentialCache, 100, time,
+                new DelegationTokenCache(ScramMechanism.mechanismNames()));
+    }
+
+    public NioEchoServer(ListenerName listenerName, SecurityProtocol securityProtocol, AbstractConfig config,
+            String serverHost, ChannelBuilder channelBuilder, CredentialCache credentialCache,
+            int failedAuthenticationDelayMs, Time time, DelegationTokenCache tokenCache) throws Exception {
         super("echoserver");
         setDaemon(true);
         serverSocketChannel = ServerSocketChannel.open();
@@ -85,7 +92,7 @@ public class NioEchoServer extends Thread {
         this.socketChannels = Collections.synchronizedList(new ArrayList<SocketChannel>());
         this.newChannels = Collections.synchronizedList(new ArrayList<SocketChannel>());
         this.credentialCache = credentialCache;
-        this.tokenCache = new DelegationTokenCache(ScramMechanism.mechanismNames());
+        this.tokenCache = tokenCache;
         if (securityProtocol == SecurityProtocol.SASL_PLAINTEXT || securityProtocol == SecurityProtocol.SASL_SSL) {
             for (String mechanism : ScramMechanism.mechanismNames()) {
                 if (credentialCache.cache(mechanism, ScramCredential.class) == null)
@@ -111,7 +118,6 @@ public class NioEchoServer extends Thread {
         return tokenCache;
     }
 
-    @SuppressWarnings("deprecation")
     public double metricValue(String name) {
         for (Map.Entry<MetricName, KafkaMetric> entry : metrics.metrics().entrySet()) {
             if (entry.getKey().name().equals(name))
@@ -124,6 +130,12 @@ public class NioEchoServer extends Thread {
             throws InterruptedException {
         waitForMetric("successful-authentication", successfulAuthentications);
         waitForMetric("failed-authentication", failedAuthentications);
+    }
+
+    public void verifyReauthenticationMetrics(int successfulReuthentications, final int failedReuthentications)
+            throws InterruptedException {
+        waitForMetric("successful-reauthentication", successfulReuthentications);
+        waitForMetric("failed-reauthentication", failedReuthentications);
     }
 
     public void waitForMetric(String name, final double expectedValue) throws InterruptedException {
@@ -170,15 +182,17 @@ public class NioEchoServer extends Thread {
                 List<NetworkReceive> completedReceives = selector.completedReceives();
                 for (NetworkReceive rcv : completedReceives) {
                     KafkaChannel channel = channel(rcv.source());
-                    String channelId = channel.id();
-                    selector.mute(channelId);
-                    NetworkSend send = new NetworkSend(rcv.source(), rcv.payload());
-                    if (outputChannel == null)
-                        selector.send(send);
-                    else {
-                        for (ByteBuffer buffer : send.buffers)
-                            outputChannel.write(buffer);
-                        selector.unmute(channelId);
+                    if (!TestUtils.maybeBeginServerReauthentication(channel, rcv)) {
+                        String channelId = channel.id();
+                        selector.mute(channelId);
+                        NetworkSend send = new NetworkSend(rcv.source(), rcv.payload());
+                        if (outputChannel == null)
+                            selector.send(send);
+                        else {
+                            for (ByteBuffer buffer : send.buffers)
+                                outputChannel.write(buffer);
+                            selector.unmute(channelId);
+                        }
                     }
                 }
                 for (Send send : selector.completedSends()) {

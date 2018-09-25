@@ -513,7 +513,19 @@ public class KafkaChannel {
         return true;
     }
 
-
+    /**
+     * Return true if the given time is past the session expiration time, if any,
+     * otherwise false
+     * 
+     * @param time
+     *            the mandatory time
+     * @return true if the given time is past the session expiration time, if any,
+     *         otherwise false
+     */
+    public boolean sessionExpired(Time time) {
+        return sessionReauthenticateTimeMs != null && time.milliseconds() > sessionReauthenticateTimeMs.longValue();
+    }
+    
     /**
      * Return the client-side {@link NetworkReceive} responses that arrived during
      * re-authentication that are unrelated to re-authentication, if any, otherwise

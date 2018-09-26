@@ -27,6 +27,7 @@ import org.apache.kafka.common.metrics.stats.Count;
 import org.apache.kafka.common.metrics.stats.Max;
 import org.apache.kafka.common.metrics.stats.Meter;
 import org.apache.kafka.common.metrics.stats.SampledStat;
+import org.apache.kafka.common.metrics.stats.Total;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
@@ -535,11 +536,16 @@ public class Selector implements Selectable, AutoCloseable {
                             sensors.failedReauthentication.record();
                         throw e;
                     }
-                    if (channel.ready())
+                    if (channel.ready()) {
                         if (channel.successfulAuthentications() == 1)
                             sensors.successfulAuthentication.record();
                         else
                             sensors.successfulReauthentication.record();
+                        Short clientSaslAuthenticateVersion = channel.clientSaslAuthenticateVersion();
+                        if (clientSaslAuthenticateVersion != null
+                                && clientSaslAuthenticateVersion.shortValue() == (short) 0)
+                            sensors.successfulV0Authentication.record();
+                    }
                     Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel
                             .getAndClearResponsesReceivedDuringReauthentication();
                     if (responsesReceivedDuringReauthentication != null)
@@ -982,6 +988,7 @@ public class Selector implements Selectable, AutoCloseable {
         public final Sensor connectionCreated;
         public final Sensor successfulAuthentication;
         public final Sensor successfulReauthentication;
+        public final Sensor successfulV0Authentication;
         public final Sensor failedAuthentication;
         public final Sensor failedReauthentication;
         public final Sensor bytesTransferred;
@@ -1023,6 +1030,19 @@ public class Selector implements Selectable, AutoCloseable {
             this.successfulReauthentication = sensor("successful-reauthentication:" + tagsSuffix);
             this.successfulReauthentication.add(createMeter(metrics, metricGrpName, metricTags,
                     "successful-reauthentication", "successful re-authentication of connections"));
+
+            String successfulV0AuthenticationMetricTagKey = "auth";
+            String successfulV0AuthenticationMetricTagValue = "v0";
+            this.successfulV0Authentication = sensor("successful-authentication:" + tagsSuffix
+                    + successfulV0AuthenticationMetricTagKey + "-" + successfulV0AuthenticationMetricTagValue);
+            // preserve original tag order with LinkedHashMap, and append our tag
+            Map<String, String> successfulV0AuthenticationMetricTags = new LinkedHashMap<>(metricTags);
+            successfulV0AuthenticationMetricTags.put(successfulV0AuthenticationMetricTagKey,
+                    successfulV0AuthenticationMetricTagValue);
+            MetricName successfulV0AuthenticationMetricName = metrics.metricName("successful-authentication-total",
+                    metricGrpName, "The total number of connections with successful version=0 authentication",
+                    successfulV0AuthenticationMetricTags);
+            this.successfulV0Authentication.add(successfulV0AuthenticationMetricName, new Total());
 
             this.failedAuthentication = sensor("failed-authentication:" + tagsSuffix);
             this.failedAuthentication.add(createMeter(metrics, metricGrpName, metricTags,

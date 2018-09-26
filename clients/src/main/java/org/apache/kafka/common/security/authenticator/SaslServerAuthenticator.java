@@ -111,6 +111,7 @@ public class SaslServerAuthenticator implements Authenticator {
     private final Map<String, AuthenticateCallbackHandler> callbackHandlers;
     private final Map<String, Long> connectionsMaxReauthMsByMechanism;
     private Long sessionBeginTimeMs = null;
+    private short clientSaslAuthenticateVersion;
 
     // Current SASL state
     private SaslState saslState = SaslState.INITIAL_REQUEST;
@@ -350,6 +351,15 @@ public class SaslServerAuthenticator implements Authenticator {
         return sessionBeginTimeMs.longValue();
     }
 
+    /**
+     * Return the version the client used when sending SASL_AUTHENTICATE
+     * 
+     * @return the version the client used when sending SASL_AUTHENTICATE
+     */
+    public short clientSaslAuthenticateVersion() {
+        return clientSaslAuthenticateVersion;
+    }
+    
     private void setSaslState(SaslState saslState) {
         setSaslState(saslState, null);
     }
@@ -418,6 +428,8 @@ public class SaslServerAuthenticator implements Authenticator {
                 // This should not normally occur since clients typically check supported versions using ApiVersionsRequest
                 throw new UnsupportedVersionException("Version " + version + " is not supported for apiKey " + apiKey);
             }
+            if (version > clientSaslAuthenticateVersion)
+                clientSaslAuthenticateVersion = version;
             SaslAuthenticateRequest saslAuthenticateRequest = (SaslAuthenticateRequest) requestAndSize.request;
     
             try {

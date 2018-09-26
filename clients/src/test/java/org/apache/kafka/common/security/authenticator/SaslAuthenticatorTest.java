@@ -1568,7 +1568,7 @@ public class SaslAuthenticatorTest {
         createClientConnection(securityProtocol, node);
         NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         if (waitAndReauthenticate) {
-            Thread.sleep((long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1));
+            Thread.sleep((long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.5));
             NetworkTestUtils.waitForChannelReady(selector, node);
             NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         }

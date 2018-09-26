@@ -1165,6 +1165,9 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslPlainPlaintextClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_PLAINTEXT, "PLAIN");
+        server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(0, 0);
+        server.verifyV0AuthenticationMetrics(1);
     }
 
     /**
@@ -1183,6 +1186,9 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslScramPlaintextClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_PLAINTEXT, "SCRAM-SHA-256");
+        server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(0, 0);
+        server.verifyV0AuthenticationMetrics(1);
     }
 
     /**
@@ -1201,6 +1207,9 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslPlainSslClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_SSL, "PLAIN");
+        server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(0, 0);
+        server.verifyV0AuthenticationMetrics(1);
     }
 
     /**
@@ -1219,6 +1228,9 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslScramSslClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_SSL, "SCRAM-SHA-512");
+        server.verifyAuthenticationMetrics(1, 0);
+        server.verifyReauthenticationMetrics(0, 0);
+        server.verifyV0AuthenticationMetrics(1);
     }
 
     /**

@@ -144,4 +144,15 @@ public interface Authenticator extends Closeable {
     default Deque<NetworkReceive> getAndClearResponsesReceivedDuringReauthentication() {
         return null;
     }
+    
+    /**
+     * Return true if this is a server-side authenticator and the connected client
+     * supports re-authentication, otherwise false
+     * 
+     * @return true if this is a server-side authenticator and the connected client
+     *         supports re-authentication, otherwise false
+     */
+    default boolean clientSupportsReauthentication() {
+        return false;
+    }
 }

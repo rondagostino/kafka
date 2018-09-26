@@ -19,7 +19,6 @@ package org.apache.kafka.common.network;
 import org.apache.kafka.common.errors.AuthenticationException;
 import org.apache.kafka.common.memory.MemoryPool;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
-import org.apache.kafka.common.security.authenticator.SaslServerAuthenticator;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 
@@ -544,16 +543,14 @@ public class KafkaChannel {
     }
     
     /**
-     * Return null if this is not a SASL server channel, otherwise return the
-     * version the client used when sending SASL_AUTHENTICATE request
+     * Return true if this is a server-side channel and the connected client
+     * supports re-authentication, otherwise false
      * 
-     * @return null if this is not a SASL server channel, otherwise return the
-     *         version the client used when sending SASL_AUTHENTICATE request
+     * @return true if this is a server-side channel and the connected client
+     *         supports re-authentication, otherwise false
      */
-    public Short clientSaslAuthenticateVersion() {
-        return authenticator instanceof SaslServerAuthenticator
-                ? Short.valueOf(((SaslServerAuthenticator) authenticator).clientSaslAuthenticateVersion())
-                : null;
+    boolean clientSupportsReauthentication() {
+        return authenticator.clientSupportsReauthentication();
     }
 
     private void swapAuthenticatorsAndBeginReauthentication(ReauthenticationContext reauthenticationContext)

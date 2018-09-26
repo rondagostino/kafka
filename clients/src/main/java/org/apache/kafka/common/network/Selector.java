@@ -541,9 +541,7 @@ public class Selector implements Selectable, AutoCloseable {
                             sensors.successfulAuthentication.record();
                         else
                             sensors.successfulReauthentication.record();
-                        Short clientSaslAuthenticateVersion = channel.clientSaslAuthenticateVersion();
-                        if (clientSaslAuthenticateVersion != null
-                                && clientSaslAuthenticateVersion.shortValue() == (short) 0)
+                        if (!channel.clientSupportsReauthentication())
                             sensors.successfulV0Authentication.record();
                     }
                     Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel

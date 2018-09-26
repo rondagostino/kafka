@@ -510,7 +510,7 @@ public class SaslAuthenticatorTest {
                 System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
         server.tokenCache().addToken(tokenId, tokenInfo);
         updateTokenCredentialCache(tokenId, tokenHmac);
-        createAndCheckClientConnection(securityProtocol, "0");
+        createAndCheckClientConnection(securityProtocol, "0", 10);
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
     }
@@ -1565,10 +1565,14 @@ public class SaslAuthenticatorTest {
     }
 
     private void createAndCheckClientConnection(SecurityProtocol securityProtocol, String node) throws Exception {
+        createAndCheckClientConnection(securityProtocol, node, 1);
+    }
+
+    private void createAndCheckClientConnection(SecurityProtocol securityProtocol, String node, int reauthSleepFactor) throws Exception {
         createClientConnection(securityProtocol, node);
         NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         if (waitAndReauthenticate) {
-            Thread.sleep((long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.5));
+            Thread.sleep((long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.5 * reauthSleepFactor));
             NetworkTestUtils.waitForChannelReady(selector, node);
             NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         }

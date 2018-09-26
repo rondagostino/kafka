@@ -138,25 +138,38 @@ public class NioEchoServer extends Thread {
         waitForMetric("failed-reauthentication", failedReuthentications);
     }
 
+    public void verifyV0AuthenticationMetrics(int successfulV0Authentications)
+            throws InterruptedException {
+        waitForMetric("successful-v0-authentication", successfulV0Authentications, true, false);
+    }
+
     public void waitForMetric(String name, final double expectedValue) throws InterruptedException {
+        waitForMetric(name, expectedValue, true, true);
+    }
+
+    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate) throws InterruptedException {
         final String totalName = name + "-total";
         final String rateName = name + "-rate";
         if (expectedValue == 0.0) {
-            assertEquals(expectedValue, metricValue(totalName), EPS);
-            assertEquals(expectedValue, metricValue(rateName), EPS);
+            if (total)
+                assertEquals(expectedValue, metricValue(totalName), EPS);
+            if (rate)
+                assertEquals(expectedValue, metricValue(rateName), EPS);
         } else {
-            TestUtils.waitForCondition(new TestCondition() {
-                @Override
-                public boolean conditionMet() {
-                    return Math.abs(metricValue(totalName) - expectedValue) <= EPS;
-                }
-            }, "Metric not updated " + totalName);
-            TestUtils.waitForCondition(new TestCondition() {
-                @Override
-                public boolean conditionMet() {
-                    return metricValue(rateName) > 0.0;
-                }
-            }, "Metric not updated " + rateName);
+            if (total)
+                TestUtils.waitForCondition(new TestCondition() {
+                    @Override
+                    public boolean conditionMet() {
+                        return Math.abs(metricValue(totalName) - expectedValue) <= EPS;
+                    }
+                }, "Metric not updated " + totalName);
+            if (rate)
+                TestUtils.waitForCondition(new TestCondition() {
+                    @Override
+                    public boolean conditionMet() {
+                        return metricValue(rateName) > 0.0;
+                    }
+                }, "Metric not updated " + rateName);
         }
     }
 

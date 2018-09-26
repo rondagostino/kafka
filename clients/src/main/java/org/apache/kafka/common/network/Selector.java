@@ -1033,13 +1033,13 @@ public class Selector implements Selectable, AutoCloseable {
 
             String successfulV0AuthenticationMetricTagKey = "auth";
             String successfulV0AuthenticationMetricTagValue = "v0";
-            this.successfulV0Authentication = sensor("successful-authentication:" + tagsSuffix
+            this.successfulV0Authentication = sensor("successful-v0-authentication:" + tagsSuffix
                     + successfulV0AuthenticationMetricTagKey + "-" + successfulV0AuthenticationMetricTagValue);
             // preserve original tag order with LinkedHashMap, and append our tag
             Map<String, String> successfulV0AuthenticationMetricTags = new LinkedHashMap<>(metricTags);
             successfulV0AuthenticationMetricTags.put(successfulV0AuthenticationMetricTagKey,
                     successfulV0AuthenticationMetricTagValue);
-            MetricName successfulV0AuthenticationMetricName = metrics.metricName("successful-authentication-total",
+            MetricName successfulV0AuthenticationMetricName = metrics.metricName("successful-v0-authentication-total",
                     metricGrpName, "The total number of connections with successful version=0 authentication",
                     successfulV0AuthenticationMetricTags);
             this.successfulV0Authentication.add(successfulV0AuthenticationMetricName, new Total());

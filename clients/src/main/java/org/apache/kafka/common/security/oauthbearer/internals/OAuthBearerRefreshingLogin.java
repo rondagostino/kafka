@@ -107,7 +107,8 @@ public class OAuthBearerRefreshingLogin implements Login {
                 final OAuthBearerToken token = privateCredentialTokens.iterator().next();
                 log.debug("Found expiring credential (OAuth 2 Bearer Token) with principal '{}'.",
                         token.principalName());
-                return new OAuthBearerTokenExpiringCredential(token);
+                return token instanceof ExpiringCredential ? (ExpiringCredential) token
+                        : new OAuthBearerTokenExpiringCredential(token);
             }
         };
     }

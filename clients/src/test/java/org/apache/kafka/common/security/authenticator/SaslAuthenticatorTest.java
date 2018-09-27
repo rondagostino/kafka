@@ -112,7 +112,7 @@ import static org.junit.Assert.fail;
 @RunWith(value = Parameterized.class)
 public class SaslAuthenticatorTest {
 
-    private static final long CONNECTIONS_MAX_REAUTH_MS_VALUE = 50L;
+    private static final long CONNECTIONS_MAX_REAUTH_MS_VALUE = 200L;
     private static final int BUFFER_SIZE = 4 * 1024;
     private static Time time = Time.SYSTEM;
 

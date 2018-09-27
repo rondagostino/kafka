@@ -21,7 +21,6 @@ import org.apache.kafka.common.memory.MemoryPool;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.common.security.auth.KafkaPrincipalBuilder;
 import org.apache.kafka.common.security.auth.PlaintextAuthenticationContext;
-import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,15 +35,13 @@ public class PlaintextChannelBuilder implements ChannelBuilder {
     private static final Logger log = LoggerFactory.getLogger(PlaintextChannelBuilder.class);
     private final ListenerName listenerName;
     private Map<String, ?> configs;
-    private final Time time;
 
     /**
      * Constructs a plaintext channel builder. ListenerName is non-null whenever
      * it's instantiated in the broker and null otherwise.
      */
-    public PlaintextChannelBuilder(ListenerName listenerName, Time time) {
+    public PlaintextChannelBuilder(ListenerName listenerName) {
         this.listenerName = listenerName;
-        this.time = time;
     }
 
     public void configure(Map<String, ?> configs) throws KafkaException {
@@ -55,7 +52,7 @@ public class PlaintextChannelBuilder implements ChannelBuilder {
     public KafkaChannel buildChannel(String id, SelectionKey key, int maxReceiveSize, MemoryPool memoryPool) throws KafkaException {
         try {
             PlaintextTransportLayer transportLayer = new PlaintextTransportLayer(key);
-            Supplier<Authenticator> authenticatorCreator = () -> new PlaintextAuthenticator(configs, transportLayer, listenerName, time);
+            Supplier<Authenticator> authenticatorCreator = () -> new PlaintextAuthenticator(configs, transportLayer, listenerName);
             return new KafkaChannel(id, transportLayer, authenticatorCreator, maxReceiveSize,
                     memoryPool != null ? memoryPool : MemoryPool.NONE);
         } catch (Exception e) {
@@ -71,13 +68,11 @@ public class PlaintextChannelBuilder implements ChannelBuilder {
         private final PlaintextTransportLayer transportLayer;
         private final KafkaPrincipalBuilder principalBuilder;
         private final ListenerName listenerName;
-        private final long sessionBeginTimeMs;
 
-        private PlaintextAuthenticator(Map<String, ?> configs, PlaintextTransportLayer transportLayer, ListenerName listenerName, Time time) {
+        private PlaintextAuthenticator(Map<String, ?> configs, PlaintextTransportLayer transportLayer, ListenerName listenerName) {
             this.transportLayer = transportLayer;
             this.principalBuilder = ChannelBuilders.createPrincipalBuilder(configs, transportLayer, this, null);
             this.listenerName = listenerName;
-            this.sessionBeginTimeMs = time.milliseconds();
         }
 
         @Override
@@ -102,11 +97,6 @@ public class PlaintextChannelBuilder implements ChannelBuilder {
             if (principalBuilder instanceof Closeable)
                 Utils.closeQuietly((Closeable) principalBuilder, "principal builder");
         }
-
-        @Override
-        public long sessionBeginTimeMs() {
-            return sessionBeginTimeMs;
-        }        
     }
 
 }

@@ -80,7 +80,7 @@ public class SslTransportLayerTest {
         clientCertStores = new CertStores(false, "client", "localhost");
         sslServerConfigs = serverCertStores.getTrustingConfig(clientCertStores);
         sslClientConfigs = clientCertStores.getTrustingConfig(serverCertStores);
-        this.channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false, time);
+        this.channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false);
         this.channelBuilder.configure(sslClientConfigs);
         this.selector = new Selector(5000, new Metrics(), time, "MetricGroup", channelBuilder, new LogContext());
     }
@@ -447,7 +447,7 @@ public class SslTransportLayerTest {
      */
     @Test
     public void testInvalidSecureRandomImplementation() throws Exception {
-        try (SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false, time)) {
+        try (SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false)) {
             sslClientConfigs.put(SslConfigs.SSL_SECURE_RANDOM_IMPLEMENTATION_CONFIG, "invalid");
             channelBuilder.configure(sslClientConfigs);
             fail("SSL channel configured with invalid SecureRandom implementation");
@@ -461,7 +461,7 @@ public class SslTransportLayerTest {
      */
     @Test
     public void testInvalidTruststorePassword() throws Exception {
-        try (SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false, time)) {
+        try (SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false)) {
             sslClientConfigs.put(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, "invalid");
             channelBuilder.configure(sslClientConfigs);
             fail("SSL channel configured with invalid truststore password");
@@ -475,7 +475,7 @@ public class SslTransportLayerTest {
      */
     @Test
     public void testInvalidKeystorePassword() throws Exception {
-        try (SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false, time)) {
+        try (SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false)) {
             sslClientConfigs.put(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG, "invalid");
             channelBuilder.configure(sslClientConfigs);
             fail("SSL channel configured with invalid keystore password");
@@ -843,12 +843,12 @@ public class SslTransportLayerTest {
 
     @Test
     public void testCloseSsl() throws Exception {
-        testClose(SecurityProtocol.SSL, new SslChannelBuilder(Mode.CLIENT, null, false, time));
+        testClose(SecurityProtocol.SSL, new SslChannelBuilder(Mode.CLIENT, null, false));
     }
 
     @Test
     public void testClosePlaintext() throws Exception {
-        testClose(SecurityProtocol.PLAINTEXT, new PlaintextChannelBuilder(null, time));
+        testClose(SecurityProtocol.PLAINTEXT, new PlaintextChannelBuilder(null));
     }
 
     private void testClose(SecurityProtocol securityProtocol, ChannelBuilder clientChannelBuilder) throws Exception {
@@ -1059,7 +1059,7 @@ public class SslTransportLayerTest {
         int flushDelayCount = 0;
 
         public TestSslChannelBuilder(Mode mode) {
-            super(mode, null, false, time);
+            super(mode, null, false);
         }
 
         public void configureBufferSizes(Integer netReadBufSize, Integer netWriteBufSize, Integer appBufSize) {

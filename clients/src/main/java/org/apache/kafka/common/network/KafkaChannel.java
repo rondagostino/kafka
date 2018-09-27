@@ -19,7 +19,6 @@ package org.apache.kafka.common.network;
 import org.apache.kafka.common.errors.AuthenticationException;
 import org.apache.kafka.common.memory.MemoryPool;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
-import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 
 import java.io.IOException;
@@ -28,7 +27,6 @@ import java.net.Socket;
 import java.nio.channels.SelectionKey;
 import java.util.Deque;
 import java.util.Objects;
-import java.util.Random;
 import java.util.function.Supplier;
 
 /**
@@ -103,7 +101,6 @@ public class KafkaChannel {
         THROTTLE_ENDED
     }
 
-    private static final Random RNG = new Random();
     private final String id;
     private final TransportLayer transportLayer;
     private Authenticator authenticator;
@@ -121,7 +118,8 @@ public class KafkaChannel {
     private ChannelMuteState muteState;
     private ChannelState state;
     private int successfulAuthentications = 0;
-    private Long sessionReauthenticateTimeMs = null;
+    private Long clientSessionReauthenticationTimeMs = null;
+    private Long serverAuthenticationSessionExpirationTimeNanos = null;
     private boolean midWrite = false;
 
     public KafkaChannel(String id, TransportLayer transportLayer, Supplier<Authenticator> authenticatorCreator, int maxReceiveSize, MemoryPool memoryPool) {
@@ -175,17 +173,9 @@ public class KafkaChannel {
         }
         if (ready()) {
             ++successfulAuthentications;
-            Long sessionExpirationTimeMs = authenticator.sessionExpirationTimeMs();
-            if (sessionExpirationTimeMs != null) {
-                long sesionBeginTimeMs = authenticator.sessionBeginTimeMs();
-                // pick a random percentage between 85% and 95%
-                double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
-                double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
-                double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount + RNG.nextDouble()
-                        * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
-                sessionReauthenticateTimeMs = sesionBeginTimeMs
-                        + (long) ((sessionExpirationTimeMs - sesionBeginTimeMs) * pctToUse);
-            }
+            // At least one -- and possibly both -- of these next two values will be null
+            clientSessionReauthenticationTimeMs = authenticator.clientSessionReauthenticationTimeMs();
+            serverAuthenticationSessionExpirationTimeNanos = authenticator.serverSessionExpirationTimeNanos();
             state = ChannelState.READY;
         }
     }
@@ -478,7 +468,7 @@ public class KafkaChannel {
      */
     public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive)
             throws AuthenticationException, IOException {
-        if (!ready() || !authenticator.supportsServerReauth())
+        if (serverAuthenticationSessionExpirationTimeNanos == null || !ready())
             return false;
         swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(saslHandshakeNetworkReceive));
         return true;
@@ -490,8 +480,8 @@ public class KafkaChannel {
      * past and no writes are in progress then re-authenticate the connection and
      * return true, otherwise return false
      * 
-     * @param time
-     *            the mandatory {@link Time} instance
+     * @param now
+     *            the current time in milliseconds since the epoch
      * @return this is a client-side connection that is ready for use (i.e.
      *         authenticated and operational) and there is both a session expiration
      *         time defined that has past and no writes are in progress then
@@ -503,10 +493,10 @@ public class KafkaChannel {
      * @throws IOException
      *             if read/write fails due to an I/O error
      */
-    public boolean maybeBeginClientReauthentication(Time time) throws AuthenticationException, IOException {
-        if (sessionReauthenticateTimeMs == null || !ready() || !authenticator.supportsClientReauth())
+    public boolean maybeBeginClientReauthentication(long now) throws AuthenticationException, IOException {
+        if (clientSessionReauthenticationTimeMs == null || !ready())
             return false;
-        if (midWrite || time.milliseconds() < sessionReauthenticateTimeMs)
+        if (midWrite || now < clientSessionReauthenticationTimeMs.longValue())
             return false;
         swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(authenticator, receive));
         receive = null;
@@ -514,16 +504,17 @@ public class KafkaChannel {
     }
 
     /**
-     * Return true if the given time is past the session expiration time, if any,
-     * otherwise false
+     * Return true if this is a server-side channel and the given time is past the
+     * session expiration time, if any, otherwise false
      * 
-     * @param time
-     *            the mandatory time
-     * @return true if the given time is past the session expiration time, if any,
-     *         otherwise false
+     * @param nanos
+     *            the current time in nanoseconds as per {@link System#nanoTime()}
+     * @return true if this is a server-side channel and the given time is past the
+     *         session expiration time, if any, otherwise false
      */
-    public boolean sessionExpired(Time time) {
-        return sessionReauthenticateTimeMs != null && time.milliseconds() > sessionReauthenticateTimeMs.longValue();
+    public boolean serverAuthenticationSessionExpired(long nanos) {
+        return serverAuthenticationSessionExpirationTimeNanos != null
+                && nanos > serverAuthenticationSessionExpirationTimeNanos.longValue();
     }
     
     /**
@@ -549,8 +540,8 @@ public class KafkaChannel {
      * @return true if this is a server-side channel and the connected client
      *         supports re-authentication, otherwise false
      */
-    boolean clientSupportsReauthentication() {
-        return authenticator.clientSupportsReauthentication();
+    boolean connectedClientSupportsReauthentication() {
+        return authenticator.connectedClientSupportsReauthentication();
     }
 
     private void swapAuthenticatorsAndBeginReauthentication(ReauthenticationContext reauthenticationContext)

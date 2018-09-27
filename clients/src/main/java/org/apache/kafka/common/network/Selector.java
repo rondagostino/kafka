@@ -541,7 +541,7 @@ public class Selector implements Selectable, AutoCloseable {
                             sensors.successfulAuthentication.record();
                         else
                             sensors.successfulReauthentication.record();
-                        if (!channel.clientSupportsReauthentication())
+                        if (!channel.connectedClientSupportsReauthentication())
                             sensors.successfulV0Authentication.record();
                     }
                     Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel
@@ -565,7 +565,7 @@ public class Selector implements Selectable, AutoCloseable {
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
                 if (channel.ready() && key.isWritable()) {
-                    if (!channel.maybeBeginClientReauthentication(time)) {
+                    if (!channel.maybeBeginClientReauthentication(time.milliseconds())) {
                         Send send;
                         try {
                             send = channel.write();

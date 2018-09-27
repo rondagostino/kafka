@@ -498,12 +498,14 @@ public class SaslAuthenticatorTest {
          * createAndCheckClientConnection(); and then the second time the value is read (during re-authentication) 
          * it will be in the future.
          */
+        int windowExpansionFactor = 10;
         DelegationTokenCache tokenCache = new DelegationTokenCache(ScramMechanism.mechanismNames()) {
             int callNum = 0;
 
             @Override
             public TokenInformation token(String tokenId) {
-                ++callNum;
+                // we were failing on github but not locally, so expand the window
+                callNum = callNum + windowExpansionFactor;
                 TokenInformation baseTokenInfo = super.token(tokenId);
                 long now = System.currentTimeMillis();
                 TokenInformation retvalTokenInfo = new TokenInformation(baseTokenInfo.tokenId(), baseTokenInfo.owner(),
@@ -521,7 +523,7 @@ public class SaslAuthenticatorTest {
                 System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
         server.tokenCache().addToken(tokenId, tokenInfo);
         updateTokenCredentialCache(tokenId, tokenHmac);
-        createAndCheckClientConnection(securityProtocol, "0", 10);
+        createAndCheckClientConnection(securityProtocol, "0", windowExpansionFactor);
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
         server.verifyV0AuthenticationMetrics(0);

@@ -66,7 +66,17 @@ class KafkaRequestHandler(id: Int,
           try {
             request.requestDequeueTimeNanos = endTime
             trace(s"Kafka request handler $id on broker $brokerId handling request $request")
-            apis.handle(request)
+            requestChannel.kafkaChannel(request) match {
+              case Some(kafkaChannel) => {
+                if (kafkaChannel.serverAuthenticationSessionExpired(endTime)) {
+                  kafkaChannel.disconnect()
+                  debug(s"Disconnected expired channel: $kafkaChannel")
+                  // TODO: metric
+                } else
+                  apis.handle(request)
+              }
+              case None => throw new RuntimeException("Could not identify KafkaChannel instance; it must have already closed")
+            }
           } catch {
             case e: FatalExitError =>
               shutdownComplete.countDown()

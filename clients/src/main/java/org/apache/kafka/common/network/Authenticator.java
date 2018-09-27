@@ -57,28 +57,6 @@ public interface Authenticator extends Closeable {
     boolean complete();
 
     /**
-     * Return true if this instance is a client-side authenticator that supports
-     * re-authentication, otherwise false
-     * 
-     * @return true if this instance is a client-side authenticator that supports
-     *         re-authentication, otherwise false
-     */
-    default boolean supportsClientReauth() {
-        return false;
-    }
-
-    /**
-     * Return true if this instance is a server-side authenticator that supports
-     * re-authentication, otherwise false
-     * 
-     * @return true if this instance is a server-side authenticator that supports
-     *         re-authentication, otherwise false
-     */
-    default boolean supportsServerReauth() {
-        return false;
-    }
-
-    /**
      * Begins re-authentication. Uses transportLayer to read or write tokens as is
      * done for {@link #authenticate()}. For security protocols PLAINTEXT and SSL,
      * this is a no-op since re-authentication does not apply/is not supported,
@@ -99,33 +77,31 @@ public interface Authenticator extends Closeable {
     }
 
     /**
-     * Return the time, in milliseconds since the epoch, when the session began.
-     * Valid on both client- and server-side.
+     * Return the session expiration time, if any, otherwise null. The value is in
+     * nanoseconds as per {@link System#nanoTime()} and is therefore only useful
+     * when compared to such a value -- it's absolute value is meaningless. This
+     * value may be non-null only on the server-side. It represents the time after
+     * which, in the absence of re-authentication, the broker will close the session
+     * if it receives a request unrelated to authentication.
      * 
-     * @return the time, in milliseconds since the epoch, when the session began
-     * @throws IllegalStateException
-     *             if the session is not established
-     * @see #complete()
+     * @return the session expiration time, if any, otherwise null
      */
-    long sessionBeginTimeMs();
+    default Long serverSessionExpirationTimeNanos() {
+        return null;
+    }
 
     /**
-     * Return the client-side session expiration time, in milliseconds since the
-     * epoch, after which re-authentication must occur before the connection is used
-     * for anything else; or return null if the session has no expiration or it is
-     * on the server-side. Note that any non-null value does not take into account
-     * either the possibility of clock drift between the client and the server or
-     * the inherent latency introduced by the fact that messages have to traverse
-     * the network between the client and the server. It is therefore prudent to
-     * assume the session expires at some point before the given time (e.g. 90% of
-     * the way between the {@link #sessionBeginTimeMs()} and this time).
+     * Return the time on or after which a client should re-authenticate this
+     * session, if any, otherwise null. The value is in milliseconds since the epoch
+     * and may be non-null only on the client-side. It will be a random time between
+     * 85% and 95% of the full session lifetime to account for latency between
+     * client and server and to avoid re-authentication storms that could be caused
+     * by many sessions re-authenticating simultaneously.
      * 
-     * @return the client-side session expiration time, in milliseconds since the
-     *         epoch, after which re-authentication must occur before the connection
-     *         is used for anything else; or return null if the session has no
-     *         expiration
+     * @return the time on or after which a client should re-authenticate this
+     *         session, if any, otherwise null
      */
-    default Long sessionExpirationTimeMs() {
+    default Long clientSessionReauthenticationTimeMs() {
         return null;
     }
 
@@ -152,7 +128,7 @@ public interface Authenticator extends Closeable {
      * @return true if this is a server-side authenticator and the connected client
      *         supports re-authentication, otherwise false
      */
-    default boolean clientSupportsReauthentication() {
+    default boolean connectedClientSupportsReauthentication() {
         return false;
     }
 }

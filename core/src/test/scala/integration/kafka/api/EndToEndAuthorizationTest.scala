@@ -170,7 +170,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
   this.serverConfig.setProperty(KafkaConfig.OffsetsTopicReplicationFactorProp, "3")
   this.serverConfig.setProperty(KafkaConfig.MinInSyncReplicasProp, "3")
   this.serverConfig.setProperty(KafkaConfig.DefaultReplicationFactorProp, "3")
-  this.serverConfig.setProperty(KafkaConfig.ConnectionsMaxReauthMsProp, "50")
+  this.serverConfig.setProperty(KafkaConfig.ConnectionsMaxReauthMsProp, "1000")
   this.consumerConfig.setProperty(ConsumerConfig.GROUP_ID_CONFIG, "group")
 
   /**

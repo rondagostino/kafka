@@ -25,7 +25,6 @@ import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.security.ssl.SslFactory;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.MockTime;
-import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.test.TestCondition;
 import org.apache.kafka.test.TestSslUtils;
 import org.apache.kafka.test.TestUtils;
@@ -68,7 +67,7 @@ public class SslSelectorTest extends SelectorTest {
         this.server.start();
         this.time = new MockTime();
         sslClientConfigs = TestSslUtils.createSslConfig(false, false, Mode.CLIENT, trustStoreFile, "client");
-        this.channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false, time);
+        this.channelBuilder = new SslChannelBuilder(Mode.CLIENT, null, false);
         this.channelBuilder.configure(sslClientConfigs);
         this.metrics = new Metrics();
         this.selector = new Selector(5000, metrics, time, "MetricGroup", channelBuilder, new LogContext());
@@ -224,7 +223,7 @@ public class SslSelectorTest extends SelectorTest {
         //the initial channel builder is for clients, we need a server one
         File trustStoreFile = File.createTempFile("truststore", ".jks");
         Map<String, Object> sslServerConfigs = TestSslUtils.createSslConfig(false, true, Mode.SERVER, trustStoreFile, "server");
-        channelBuilder = new SslChannelBuilder(Mode.SERVER, null, false, time);
+        channelBuilder = new SslChannelBuilder(Mode.SERVER, null, false);
         channelBuilder.configure(sslServerConfigs);
         selector = new Selector(NetworkReceive.UNLIMITED, 5000, metrics, time, "MetricGroup",
                 new HashMap<String, String>(), true, false, channelBuilder, pool, new LogContext());
@@ -311,7 +310,7 @@ public class SslSelectorTest extends SelectorTest {
     private static class TestSslChannelBuilder extends SslChannelBuilder {
 
         public TestSslChannelBuilder(Mode mode) {
-            super(mode, null, false, Time.SYSTEM);
+            super(mode, null, false);
         }
 
         @Override

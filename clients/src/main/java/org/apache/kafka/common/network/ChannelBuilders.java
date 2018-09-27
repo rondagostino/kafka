@@ -105,7 +105,7 @@ public class ChannelBuilders {
         switch (securityProtocol) {
             case SSL:
                 requireNonNullMode(mode, securityProtocol);
-                channelBuilder = new SslChannelBuilder(mode, listenerName, isInterBrokerListener, time);
+                channelBuilder = new SslChannelBuilder(mode, listenerName, isInterBrokerListener);
                 break;
             case SASL_SSL:
             case SASL_PLAINTEXT:
@@ -134,7 +134,7 @@ public class ChannelBuilders {
                         time);
                 break;
             case PLAINTEXT:
-                channelBuilder = new PlaintextChannelBuilder(listenerName, time);
+                channelBuilder = new PlaintextChannelBuilder(listenerName);
                 break;
             default:
                 throw new IllegalArgumentException("Unexpected securityProtocol " + securityProtocol);

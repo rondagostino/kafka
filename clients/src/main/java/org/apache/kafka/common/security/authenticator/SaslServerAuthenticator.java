@@ -110,8 +110,8 @@ public class SaslServerAuthenticator implements Authenticator {
     private final KafkaPrincipalBuilder principalBuilder;
     private final Map<String, AuthenticateCallbackHandler> callbackHandlers;
     private final Map<String, Long> connectionsMaxReauthMsByMechanism;
-    private Long sessionBeginTimeMs = null;
-    private boolean clientSupportsReauthentication = false;
+    private Long sessionExpirationTimeNanos;
+    private boolean connectedClientSupportsReauthentication = false;
 
     // Current SASL state
     private SaslState saslState = SaslState.INITIAL_REQUEST;
@@ -328,11 +328,6 @@ public class SaslServerAuthenticator implements Authenticator {
     }
 
     @Override
-    public boolean supportsServerReauth() {
-        return true;
-    }
-
-    @Override
     public void reauthenticate(ReauthenticationContext reauthenticationContext) throws IOException {
         NetworkReceive saslHandshakeReceive = reauthenticationContext.saslHandshakeReceive();
         if (saslHandshakeReceive == null)
@@ -345,15 +340,13 @@ public class SaslServerAuthenticator implements Authenticator {
     }
 
     @Override
-    public long sessionBeginTimeMs() {
-        if (sessionBeginTimeMs == null)
-            throw new IllegalStateException("Session not yet established: " + getClass().getSimpleName());
-        return sessionBeginTimeMs.longValue();
+    public Long serverSessionExpirationTimeNanos() {
+        return sessionExpirationTimeNanos;
     }
 
     @Override
-    public boolean clientSupportsReauthentication() {
-        return clientSupportsReauthentication;
+    public boolean connectedClientSupportsReauthentication() {
+        return connectedClientSupportsReauthentication;
     }
     
     private void setSaslState(SaslState saslState) {
@@ -424,8 +417,8 @@ public class SaslServerAuthenticator implements Authenticator {
                 // This should not normally occur since clients typically check supported versions using ApiVersionsRequest
                 throw new UnsupportedVersionException("Version " + version + " is not supported for apiKey " + apiKey);
             }
-            if (!clientSupportsReauthentication)
-                clientSupportsReauthentication = version > 0;
+            if (!connectedClientSupportsReauthentication)
+                connectedClientSupportsReauthentication = version > 0;
             SaslAuthenticateRequest saslAuthenticateRequest = (SaslAuthenticateRequest) requestAndSize.request;
     
             try {
@@ -457,6 +450,7 @@ public class SaslServerAuthenticator implements Authenticator {
         long retvalSessionReauthMs = 0L;
         if (saslServer.isComplete()) {
             long authenticationTimeMs = time.milliseconds();
+            long authenticationTimeNanos = time.nanoseconds();
             Long saslServerConectionLifetimeMs = (Long) saslServer
                     .getNegotiatedProperty(JaasUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
             Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
@@ -470,15 +464,19 @@ public class SaslServerAuthenticator implements Authenticator {
                     retvalSessionReauthMs = zeroIfNegative(
                             Math.min(saslServerConectionLifetimeMs.longValue() - authenticationTimeMs,
                                     connectionsMaxReauthMs.longValue()));
+                if (retvalSessionReauthMs > 0L)
+                    sessionExpirationTimeNanos = Long
+                            .valueOf(authenticationTimeNanos + 1000 * 1000 * retvalSessionReauthMs);
             }
             LOG.debug(
-                    "Authentication complete; session lifetime from broker config={} ms, credential expiration={} ({} ms), sending {} ms to client",
+                    "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); session expiration = {} ({} ms), sending {} ms to client",
                     connectionsMaxReauthMs,
                     saslServerConectionLifetimeMs != null ? new Date(saslServerConectionLifetimeMs) : null,
                     saslServerConectionLifetimeMs != null
                             ? Long.valueOf(saslServerConectionLifetimeMs.longValue() - authenticationTimeMs)
                             : null,
-                    retvalSessionReauthMs);
+                    sessionExpirationTimeNanos != null ? new Date(authenticationTimeMs + retvalSessionReauthMs) : "N/A",
+                    sessionExpirationTimeNanos != null ? retvalSessionReauthMs : "N/A", retvalSessionReauthMs);
         }
         return retvalSessionReauthMs;
     }

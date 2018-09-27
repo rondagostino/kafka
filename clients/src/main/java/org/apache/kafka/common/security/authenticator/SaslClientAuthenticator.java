@@ -66,6 +66,7 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Random;
 import java.util.Set;
 
 public class SaslClientAuthenticator implements Authenticator {
@@ -84,6 +85,7 @@ public class SaslClientAuthenticator implements Authenticator {
 
     private static final Logger LOG = LoggerFactory.getLogger(SaslClientAuthenticator.class);
     private static final short DISABLE_KAFKA_SASL_AUTHENTICATE_HEADER = -1;
+    private static final Random RNG = new Random();
 
     private final Subject subject;
     private final String servicePrincipal;
@@ -112,11 +114,10 @@ public class SaslClientAuthenticator implements Authenticator {
     private short saslAuthenticateVersion;
     private Deque<NetworkReceive> pendingAuthenticatedReceives = new ArrayDeque<>();
     private ApiVersionsResponse apiVersionsResponse = null;
-    private Long sessionExpirationTimeMs = null;
+    private Long positiveSessionReauthMs = null;
     private boolean reauthenticating = false;
-    private boolean interestedInWritingImmediatelyAfterReauthentication = false;
     private final Time time;
-    private Long sessionBeginTimeMs = null;
+    private Long clientSessionReauthenticationTimeMs = null;
 
     public SaslClientAuthenticator(Map<String, ?> configs,
                                    AuthenticateCallbackHandler callbackHandler,
@@ -234,10 +235,24 @@ public class SaslClientAuthenticator implements Authenticator {
                         setSaslState(SaslState.COMPLETE);
                     else
                         setSaslState(SaslState.CLIENT_COMPLETE);
-                    sessionBeginTimeMs = time.milliseconds();
-                    LOG.debug("{} at {} with {}", reauthenticating ? "Re-authenticated" : "Authenticated",
-                            new Date(sessionBeginTimeMs), sessionExpirationTimeMs == null ? "no session expiration"
-                                    : ("session expiration " + new Date(sessionExpirationTimeMs.longValue())));
+                    long sessionBeginTimeMs = time.milliseconds();
+                    if (positiveSessionReauthMs != null) {
+                        // pick a random percentage between 85% and 95% for session re-authentication
+                        double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
+                        double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
+                        double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount + RNG.nextDouble()
+                                * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
+                        clientSessionReauthenticationTimeMs = sessionBeginTimeMs
+                                + (long) (positiveSessionReauthMs.longValue() * pctToUse);
+                    }
+                    LOG.debug("{} at {} with {} and {}", reauthenticating ? "Re-authenticated" : "Authenticated",
+                            new Date(sessionBeginTimeMs),
+                            clientSessionReauthenticationTimeMs == null ? "no session expiration"
+                                    : ("session expiration "
+                                            + new Date(sessionBeginTimeMs + positiveSessionReauthMs.longValue())),
+                            clientSessionReauthenticationTimeMs == null ? "no session re-authentication"
+                                    : ("session re-authentication on or after "
+                                            + new Date(clientSessionReauthenticationTimeMs.longValue())));
                 }
                 break;
             case CLIENT_COMPLETE:
@@ -254,11 +269,6 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     @Override
-    public boolean supportsClientReauth() {
-        return true;
-    }
-
-    @Override
     public void reauthenticate(ReauthenticationContext reauthenticationContext) throws IOException {
         Authenticator previousAuthenticator = Objects.requireNonNull(reauthenticationContext).previousAuthenticator();
         if (!(previousAuthenticator instanceof SaslClientAuthenticator))
@@ -267,7 +277,6 @@ public class SaslClientAuthenticator implements Authenticator {
         apiVersionsResponse = ((SaslClientAuthenticator) previousAuthenticator).apiVersionsResponse;
         netInBuffer = reauthenticationContext.inProgressResponse();
         reauthenticating = true;
-        interestedInWritingImmediatelyAfterReauthentication = transportLayer.selectionKey().isWritable();
         authenticate();
     }
 
@@ -279,15 +288,8 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     @Override
-    public Long sessionExpirationTimeMs() {
-        return sessionExpirationTimeMs;
-    }
-
-    @Override
-    public long sessionBeginTimeMs() {
-        if (sessionBeginTimeMs == null)
-            throw new IllegalStateException("Session not yet established: " + getClass().getSimpleName());
-        return sessionBeginTimeMs.longValue();
+    public Long clientSessionReauthenticationTimeMs() {
+        return clientSessionReauthenticationTimeMs;
     }
 
     private RequestHeader nextRequestHeader(ApiKeys apiKey, short version) {
@@ -314,10 +316,7 @@ public class SaslClientAuthenticator implements Authenticator {
             this.saslState = saslState;
             LOG.debug("Set SASL client state to {}", saslState);
             if (saslState == SaslState.COMPLETE)
-                if (interestedInWritingImmediatelyAfterReauthentication)
-                    transportLayer.addInterestOps(SelectionKey.OP_WRITE);
-                else
-                    transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
+                transportLayer.addInterestOps(SelectionKey.OP_WRITE);
         }
     }
 
@@ -410,17 +409,8 @@ public class SaslClientAuthenticator implements Authenticator {
                     throw errMsg == null ? error.exception() : error.exception(errMsg);
                 }
                 long sessionReauthMs = response.sessionReauthMs();
-                if (sessionReauthMs > 0L) {
-                    long nowOnClient = time.milliseconds();
-                    /*
-                     * Client time is of course not perfectly synchronized with server time, and
-                     * there is also some inherent latency due to the fact that the successful
-                     * authentication message has to traverse the network, so anyone using the
-                     * published time must take into account both the possibility of clock drift and
-                     * latency.
-                     */
-                    sessionExpirationTimeMs = nowOnClient + sessionReauthMs;
-                }
+                if (sessionReauthMs > 0L)
+                    this.positiveSessionReauthMs = Long.valueOf(sessionReauthMs);
                 return Utils.readBytes(response.saslAuthBytes());
             } else
                 return null;

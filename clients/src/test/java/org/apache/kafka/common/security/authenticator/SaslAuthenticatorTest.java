@@ -112,7 +112,7 @@ import static org.junit.Assert.fail;
 @RunWith(value = Parameterized.class)
 public class SaslAuthenticatorTest {
 
-    private static final long CONNECTIONS_MAX_REAUTH_MS_VALUE = 200L;
+    private static final long CONNECTIONS_MAX_REAUTH_MS_VALUE = 500L;
     private static final int BUFFER_SIZE = 4 * 1024;
     private static Time time = Time.SYSTEM;
 
@@ -1600,7 +1600,10 @@ public class SaslAuthenticatorTest {
         createClientConnection(securityProtocol, node);
         NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         if (waitAndReauthenticate) {
-            Thread.sleep((long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.5 * reauthSleepFactor));
+            final long startTime = System.currentTimeMillis();
+            long delayMillis = (long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1 * reauthSleepFactor);
+            while ((System.currentTimeMillis() - startTime) < delayMillis)
+                Thread.sleep(100L);
             NetworkTestUtils.waitForChannelReady(selector, node);
             NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         }

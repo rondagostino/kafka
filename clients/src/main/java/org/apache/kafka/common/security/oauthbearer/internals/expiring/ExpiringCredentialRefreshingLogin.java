@@ -40,8 +40,7 @@ import org.slf4j.LoggerFactory;
  * server when the credential implements {@link ExpiringCredential}. Such
  * credentials have a limited lifetime, and an instance of this class
  * periodically refreshes them so that the client can create new connections to
- * brokers on an ongoing basis. It also supports re-authentication of existing
- * connections using the refreshed credential if that is enabled.
+ * brokers on an ongoing basis.
  * <p>
  * The parameters that impact how the refresh algorithm operates are specified
  * as part of the producer/consumer/broker configuration and are as follows. See
@@ -62,9 +61,6 @@ import org.slf4j.LoggerFactory;
  * <tr>
  * <td>{@code sasl.login.refresh.min.buffer.seconds}</td>
  * </tr>
- * <tr>
- * <td>{@code sasl.login.refresh.reauthenticate.enable}</td>
- * </tr>
  * </table>
  * 
  * @see OAuthBearerLoginModule
@@ -72,7 +68,6 @@ import org.slf4j.LoggerFactory;
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
- * @see SaslConfigs#SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC
  */
 public class ExpiringCredentialRefreshingLogin {
     /**

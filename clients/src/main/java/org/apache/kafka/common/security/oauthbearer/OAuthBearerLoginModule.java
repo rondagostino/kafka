@@ -239,7 +239,6 @@ import org.slf4j.LoggerFactory;
  * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
- * @see SaslConfigs#SASL_LOGIN_REFRESH_REAUTHENTICATE_ENABLE_DOC
  */
 public class OAuthBearerLoginModule implements LoginModule {
     /**

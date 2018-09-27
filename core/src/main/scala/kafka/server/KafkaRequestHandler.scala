@@ -113,7 +113,7 @@ class KafkaRequestHandlerPool(val brokerId: Int,
   private val threadPoolSize: AtomicInteger = new AtomicInteger(numThreads)
   /* a meter to track the average free capacity of the request handlers */
   private val aggregateIdleMeter = newMeter("RequestHandlerAvgIdlePercent", "percent", TimeUnit.NANOSECONDS)
-  private val expiredSessionsKilledCounter = newCounter("ExpiredSessionsKilledCount");
+  private val expiredSessionsKilledCounter = newCounter("ExpiredSessionsKilled");
 
   this.logIdent = "[Kafka Request Handler on Broker " + brokerId + "], "
   val runnables = new mutable.ArrayBuffer[KafkaRequestHandler](numThreads)

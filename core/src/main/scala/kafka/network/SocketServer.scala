@@ -705,6 +705,12 @@ private[kafka] class Processor(val id: Int,
             if (header.apiKey() == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive))
               trace(s"Re-authenticated: $channel")
             else {
+              if (channel.serverAuthenticationSessionExpired(time.nanoseconds)) {
+                channel.disconnect()
+                debug(s"Disconnected expired channel: $channel")
+                // TODO: metric
+                throw new RuntimeException("Disconnected expired session: " + channel + "; " + header)
+              }
               val connectionId = receive.source
               val context = new RequestContext(header, connectionId, channel.socketAddress,
                 channel.principal, listenerName, securityProtocol)

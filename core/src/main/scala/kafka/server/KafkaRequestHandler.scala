@@ -24,7 +24,6 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 
 import com.yammer.metrics.core.Meter
-import com.yammer.metrics.core.Counter
 import org.apache.kafka.common.internals.FatalExitError
 import org.apache.kafka.common.utils.{KafkaThread, Time}
 
@@ -36,7 +35,6 @@ import scala.collection.mutable
 class KafkaRequestHandler(id: Int,
                           brokerId: Int,
                           val aggregateIdleMeter: Meter,
-                          val expiredSessionsKilledCounter: Counter,
                           val totalHandlerThreads: AtomicInteger,
                           val requestChannel: RequestChannel,
                           apis: KafkaApis,
@@ -68,17 +66,7 @@ class KafkaRequestHandler(id: Int,
           try {
             request.requestDequeueTimeNanos = endTime
             trace(s"Kafka request handler $id on broker $brokerId handling request $request")
-            requestChannel.kafkaChannel(request) match {
-              case Some(kafkaChannel) => {
-                if (kafkaChannel.serverAuthenticationSessionExpired(endTime)) {
-                  kafkaChannel.disconnect()
-                  debug(s"Disconnected expired channel: $kafkaChannel")
-                  expiredSessionsKilledCounter.inc()
-                } else
-                  apis.handle(request)
-              }
-              case None => throw new RuntimeException("Could not identify KafkaChannel instance; it must have already closed")
-            }
+            apis.handle(request)
           } catch {
             case e: FatalExitError =>
               shutdownComplete.countDown()
@@ -113,7 +101,6 @@ class KafkaRequestHandlerPool(val brokerId: Int,
   private val threadPoolSize: AtomicInteger = new AtomicInteger(numThreads)
   /* a meter to track the average free capacity of the request handlers */
   private val aggregateIdleMeter = newMeter("RequestHandlerAvgIdlePercent", "percent", TimeUnit.NANOSECONDS)
-  private val expiredSessionsKilledCounter = newCounter("ExpiredSessionsKilled");
 
   this.logIdent = "[Kafka Request Handler on Broker " + brokerId + "], "
   val runnables = new mutable.ArrayBuffer[KafkaRequestHandler](numThreads)
@@ -122,7 +109,7 @@ class KafkaRequestHandlerPool(val brokerId: Int,
   }
 
   def createHandler(id: Int): Unit = synchronized {
-    runnables += new KafkaRequestHandler(id, brokerId, aggregateIdleMeter, expiredSessionsKilledCounter, threadPoolSize, requestChannel, apis, time)
+    runnables += new KafkaRequestHandler(id, brokerId, aggregateIdleMeter, threadPoolSize, requestChannel, apis, time)
     KafkaThread.daemon("kafka-request-handler-" + id, runnables(id)).start()
   }
 

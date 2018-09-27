@@ -235,24 +235,6 @@ public class SaslClientAuthenticator implements Authenticator {
                         setSaslState(SaslState.COMPLETE);
                     else
                         setSaslState(SaslState.CLIENT_COMPLETE);
-                    long sessionBeginTimeMs = time.milliseconds();
-                    if (positiveSessionReauthMs != null) {
-                        // pick a random percentage between 85% and 95% for session re-authentication
-                        double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
-                        double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
-                        double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount + RNG.nextDouble()
-                                * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
-                        clientSessionReauthenticationTimeMs = sessionBeginTimeMs
-                                + (long) (positiveSessionReauthMs.longValue() * pctToUse);
-                    }
-                    LOG.debug("{} at {} with {} and {}", reauthenticating ? "Re-authenticated" : "Authenticated",
-                            new Date(sessionBeginTimeMs),
-                            clientSessionReauthenticationTimeMs == null ? "no session expiration"
-                                    : ("session expiration "
-                                            + new Date(sessionBeginTimeMs + positiveSessionReauthMs.longValue())),
-                            clientSessionReauthenticationTimeMs == null ? "no session re-authentication"
-                                    : ("session re-authentication on or after "
-                                            + new Date(clientSessionReauthenticationTimeMs.longValue())));
                 }
                 break;
             case CLIENT_COMPLETE:
@@ -315,9 +297,32 @@ public class SaslClientAuthenticator implements Authenticator {
             this.pendingSaslState = null;
             this.saslState = saslState;
             LOG.debug("Set SASL client state to {}", saslState);
-            if (saslState == SaslState.COMPLETE)
+            if (saslState == SaslState.COMPLETE) {
+                completeAuthentication();
                 transportLayer.addInterestOps(SelectionKey.OP_WRITE);
+            }
         }
+    }
+
+    private void completeAuthentication() {
+        long sessionBeginTimeMs = time.milliseconds();
+        if (positiveSessionReauthMs != null) {
+            // pick a random percentage between 85% and 95% for session re-authentication
+            double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
+            double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
+            double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount + RNG.nextDouble()
+                    * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
+            clientSessionReauthenticationTimeMs = sessionBeginTimeMs
+                    + (long) (positiveSessionReauthMs.longValue() * pctToUse);
+        }
+        LOG.debug("{} at {} with {} and {}", reauthenticating ? "Re-authenticated" : "Authenticated",
+                new Date(sessionBeginTimeMs),
+                clientSessionReauthenticationTimeMs == null ? "no session expiration"
+                        : ("session expiration "
+                                + new Date(sessionBeginTimeMs + positiveSessionReauthMs.longValue())),
+                clientSessionReauthenticationTimeMs == null ? "no session re-authentication"
+                        : ("session re-authentication on or after "
+                                + new Date(clientSessionReauthenticationTimeMs.longValue())));
     }
 
     /**

@@ -43,6 +43,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 
 import org.apache.kafka.common.security.token.delegation.internals.DelegationTokenCache;
 
@@ -128,14 +129,14 @@ public class NioEchoServer extends Thread {
 
     public void verifyAuthenticationMetrics(int successfulAuthentications, final int failedAuthentications)
             throws InterruptedException {
-        waitForMetric("successful-authentication", successfulAuthentications);
-        waitForMetric("failed-authentication", failedAuthentications);
+        waitForMetric("successful-authentication", successfulAuthentications, true, true, metricForensics());
+        waitForMetric("failed-authentication", failedAuthentications, true, true, metricForensics());
     }
 
     public void verifyReauthenticationMetrics(int successfulReuthentications, final int failedReuthentications)
             throws InterruptedException {
-        waitForMetric("successful-reauthentication", successfulReuthentications);
-        waitForMetric("failed-reauthentication", failedReuthentications);
+        waitForMetric("successful-reauthentication", successfulReuthentications, true, true, metricForensics());
+        waitForMetric("failed-reauthentication", failedReuthentications, true, true, metricForensics());
     }
 
     public void verifyV0AuthenticationMetrics(int successfulV0Authentications)
@@ -147,29 +148,43 @@ public class NioEchoServer extends Thread {
         waitForMetric(name, expectedValue, true, true);
     }
 
-    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate) throws InterruptedException {
+    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate)
+            throws InterruptedException {
+        waitForMetric(name, expectedValue, total, rate, null);
+    }
+
+    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate,
+            BiFunction<String, String, String> forensics) throws InterruptedException {
         final String totalName = name + "-total";
         final String rateName = name + "-rate";
-        if (expectedValue == 0.0) {
-            if (total)
-                assertEquals(expectedValue, metricValue(totalName), EPS);
-            if (rate)
-                assertEquals(expectedValue, metricValue(rateName), EPS);
-        } else {
-            if (total)
-                TestUtils.waitForCondition(new TestCondition() {
-                    @Override
-                    public boolean conditionMet() {
-                        return Math.abs(metricValue(totalName) - expectedValue) <= EPS;
-                    }
-                }, "Metric not updated " + totalName);
-            if (rate)
-                TestUtils.waitForCondition(new TestCondition() {
-                    @Override
-                    public boolean conditionMet() {
-                        return metricValue(rateName) > 0.0;
-                    }
-                }, "Metric not updated " + rateName);
+        try {
+            if (expectedValue == 0.0) {
+                if (total)
+                    assertEquals(expectedValue, metricValue(totalName), EPS);
+                if (rate)
+                    assertEquals(expectedValue, metricValue(rateName), EPS);
+            } else {
+                if (total)
+                    TestUtils.waitForCondition(new TestCondition() {
+                        @Override
+                        public boolean conditionMet() {
+                            return Math.abs(metricValue(totalName) - expectedValue) <= EPS;
+                        }
+                    }, "Metric not updated " + totalName);
+                if (rate)
+                    TestUtils.waitForCondition(new TestCondition() {
+                        @Override
+                        public boolean conditionMet() {
+                            return metricValue(rateName) > 0.0;
+                        }
+                    }, "Metric not updated " + rateName);
+            }
+        } catch (AssertionError e) {
+            if (forensics == null)
+                throw e;
+            String forensicText = e.getMessage() + ": "
+                    + forensics.apply(total ? totalName : null, rate ? rateName : null);
+            throw new AssertionError(forensicText, e);
         }
     }
 
@@ -230,6 +245,13 @@ public class NioEchoServer extends Thread {
     private KafkaChannel channel(String id) {
         KafkaChannel channel = selector.channel(id);
         return channel == null ? selector.closingChannel(id) : channel;
+    }
+
+    private BiFunction<String, String, String> metricForensics() {
+        return (metric1, metric2) -> {
+            return String.format("Failed: %s=%s, %s=%s", metric1, metric1 == null ? "N/A" : metricValue(metric1),
+                    metric2, metric2 == null ? "N/A" : metricValue(metric2));
+        };
     }
 
     /**

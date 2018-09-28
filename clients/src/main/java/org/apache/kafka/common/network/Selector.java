@@ -539,8 +539,13 @@ public class Selector implements Selectable, AutoCloseable {
                     if (channel.ready()) {
                         if (channel.successfulAuthentications() == 1)
                             sensors.successfulAuthentication.record();
-                        else
+                        else {
                             sensors.successfulReauthentication.record();
+                            if (channel.reauthenticationLatencyMs() == null)
+                                throw new IllegalStateException();
+                            sensors.reauthenticationLatency.record(channel.reauthenticationLatencyMs().doubleValue(),
+                                    time.milliseconds());
+                        }
                         if (!channel.connectedClientSupportsReauthentication())
                             sensors.successfulV0Authentication.record();
                     }
@@ -987,6 +992,7 @@ public class Selector implements Selectable, AutoCloseable {
         public final Sensor successfulAuthentication;
         public final Sensor successfulReauthentication;
         public final Sensor successfulV0Authentication;
+        public final Sensor reauthenticationLatency;
         public final Sensor failedAuthentication;
         public final Sensor failedReauthentication;
         public final Sensor bytesTransferred;
@@ -1049,6 +1055,16 @@ public class Selector implements Selectable, AutoCloseable {
             this.failedReauthentication = sensor("failed-reauthentication:" + tagsSuffix);
             this.failedReauthentication.add(createMeter(metrics, metricGrpName, metricTags,
                     "failed-reauthentication", "failed re-authentication of connections"));
+
+            this.reauthenticationLatency = sensor("reauthentication-latency:" + tagsSuffix);
+            MetricName reauthenticationLatencyMaxMetricName = metrics.metricName("reauthentication-latency-max",
+                    metricGrpName, "The max latency observed due to re-authentication",
+                    metricTags);
+            this.reauthenticationLatency.add(reauthenticationLatencyMaxMetricName, new Max());
+            MetricName reauthenticationLatencyAvgMetricName = metrics.metricName("reauthentication-latency-avg",
+                    metricGrpName, "The average latency observed due to re-authentication",
+                    metricTags);
+            this.reauthenticationLatency.add(reauthenticationLatencyAvgMetricName, new Avg());
 
             this.bytesTransferred = sensor("bytes-sent-received:" + tagsSuffix);
             bytesTransferred.add(createMeter(metrics, metricGrpName, metricTags, new Count(),

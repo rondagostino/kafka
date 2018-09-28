@@ -131,6 +131,8 @@ public class SaslServerAuthenticator implements Authenticator {
     private boolean enableKafkaSaslAuthenticateHeaders;
     private boolean reauthenticating = false;
     private final Time time;
+    private long reauthenticationBeginMs;
+    private long authenticationEndMs;
 
     public SaslServerAuthenticator(Map<String, ?> configs,
                                    Map<String, AuthenticateCallbackHandler> callbackHandlers,
@@ -335,6 +337,7 @@ public class SaslServerAuthenticator implements Authenticator {
         netInBuffer = saslHandshakeReceive;
         saslHandshakeReauthenticationReceive = saslHandshakeReceive;
         reauthenticating = true;
+        reauthenticationBeginMs = reauthenticationContext.reauthenticationStartMs();
         LOG.debug("Beginning re-authentication: {}", this);
         authenticate();
     }
@@ -342,6 +345,11 @@ public class SaslServerAuthenticator implements Authenticator {
     @Override
     public Long serverSessionExpirationTimeNanos() {
         return sessionExpirationTimeNanos;
+    }
+
+    @Override
+    public Long reauthenticationTimeMs() {
+        return reauthenticating ? Long.valueOf(authenticationEndMs - reauthenticationBeginMs) : null;
     }
 
     @Override
@@ -449,7 +457,7 @@ public class SaslServerAuthenticator implements Authenticator {
     private long calcSessionReauthMs() {
         long retvalSessionReauthMs = 0L;
         if (saslServer.isComplete()) {
-            long authenticationTimeMs = time.milliseconds();
+            authenticationEndMs = time.milliseconds();
             long authenticationTimeNanos = time.nanoseconds();
             Long saslServerConectionLifetimeMs = (Long) saslServer
                     .getNegotiatedProperty(JaasUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
@@ -459,10 +467,10 @@ public class SaslServerAuthenticator implements Authenticator {
                     retvalSessionReauthMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
                 else if (connectionsMaxReauthMs == null)
                     retvalSessionReauthMs = zeroIfNegative(
-                            saslServerConectionLifetimeMs.longValue() - authenticationTimeMs);
+                            saslServerConectionLifetimeMs.longValue() - authenticationEndMs);
                 else
                     retvalSessionReauthMs = zeroIfNegative(
-                            Math.min(saslServerConectionLifetimeMs.longValue() - authenticationTimeMs,
+                            Math.min(saslServerConectionLifetimeMs.longValue() - authenticationEndMs,
                                     connectionsMaxReauthMs.longValue()));
                 if (retvalSessionReauthMs > 0L)
                     sessionExpirationTimeNanos = Long
@@ -473,9 +481,9 @@ public class SaslServerAuthenticator implements Authenticator {
                     connectionsMaxReauthMs,
                     saslServerConectionLifetimeMs != null ? new Date(saslServerConectionLifetimeMs) : null,
                     saslServerConectionLifetimeMs != null
-                            ? Long.valueOf(saslServerConectionLifetimeMs.longValue() - authenticationTimeMs)
+                            ? Long.valueOf(saslServerConectionLifetimeMs.longValue() - authenticationEndMs)
                             : null,
-                    sessionExpirationTimeNanos != null ? new Date(authenticationTimeMs + retvalSessionReauthMs) : "N/A",
+                    sessionExpirationTimeNanos != null ? new Date(authenticationEndMs + retvalSessionReauthMs) : "N/A",
                     sessionExpirationTimeNanos != null ? retvalSessionReauthMs : "N/A", retvalSessionReauthMs);
         }
         return retvalSessionReauthMs;

@@ -457,6 +457,8 @@ public class KafkaChannel {
      *            the mandatory {@link NetworkReceive} containing the
      *            {@code SaslHandshakeRequest} that has been received on the server
      *            and that initiates re-authentication.
+     * @param now
+     *            the current time in milliseconds since the epoch
      * @return true if this is a server-side connection that is ready for use (i.e.
      *         authenticated and operational) and it successfully re-authenticates,
      *         otherwise false
@@ -466,11 +468,11 @@ public class KafkaChannel {
      * @throws IOException
      *             if read/write fails due to an I/O error
      */
-    public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive)
+    public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive, long now)
             throws AuthenticationException, IOException {
         if (serverAuthenticationSessionExpirationTimeNanos == null || !ready())
             return false;
-        swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(saslHandshakeNetworkReceive));
+        swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(saslHandshakeNetworkReceive, now));
         return true;
     }
 
@@ -498,9 +500,20 @@ public class KafkaChannel {
             return false;
         if (midWrite || now < clientSessionReauthenticationTimeMs.longValue())
             return false;
-        swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(authenticator, receive));
+        swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(authenticator, receive, now));
         receive = null;
         return true;
+    }
+    
+    /**
+     * Return the number of milliseconds spent re-authenticating this client-side
+     * session, if applicable, otherwise null
+     * 
+     * @return the number of milliseconds spent re-authenticating this client-side
+     *         session, if applicable, otherwise null
+     */
+    public Long reauthenticationLatencyMs() {
+        return authenticator.reauthenticationTimeMs();
     }
 
     /**

@@ -26,6 +26,7 @@ import org.apache.kafka.common.network.NetworkReceive;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.types.Struct;
 import org.apache.kafka.common.requests.RequestHeader;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -364,7 +365,7 @@ public class TestUtils {
     public static boolean maybeBeginServerReauthentication(KafkaChannel channel, NetworkReceive networkReceive) {
         try {
             if (RequestHeader.parse(networkReceive.payload().duplicate()).apiKey() == ApiKeys.SASL_HANDSHAKE) {
-                return channel.maybeBeginServerReauthentication(networkReceive);
+                return channel.maybeBeginServerReauthentication(networkReceive, Time.SYSTEM.milliseconds());
             }
         } catch (Exception e) {
             // ignore

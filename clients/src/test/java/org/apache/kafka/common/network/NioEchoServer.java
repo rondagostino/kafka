@@ -129,14 +129,20 @@ public class NioEchoServer extends Thread {
 
     public void verifyAuthenticationMetrics(int successfulAuthentications, final int failedAuthentications)
             throws InterruptedException {
-        waitForMetric("successful-authentication", successfulAuthentications, true, true, metricForensics());
-        waitForMetric("failed-authentication", failedAuthentications, true, true, metricForensics());
+        waitForMetric("successful-authentication", successfulAuthentications, true, true, false, false, metricForensics());
+        waitForMetric("failed-authentication", failedAuthentications, true, true, false, false, metricForensics());
     }
 
     public void verifyReauthenticationMetrics(int successfulReuthentications, final int failedReuthentications)
             throws InterruptedException {
-        waitForMetric("successful-reauthentication", successfulReuthentications, true, true, metricForensics());
-        waitForMetric("failed-reauthentication", failedReuthentications, true, true, metricForensics());
+        waitForMetric("successful-reauthentication", successfulReuthentications, true, true, false, false, metricForensics());
+        waitForMetric("failed-reauthentication", failedReuthentications, true, true, false, false, metricForensics());
+    }
+
+    public void verifyReauthenticationMetricsIncludingLatency(int successfulReuthentications, final int failedReuthentications)
+            throws InterruptedException {
+        verifyReauthenticationMetrics(successfulReuthentications, failedReuthentications);
+        waitForMetric("reauthentication-latency", successfulReuthentications, false, false, true, true, metricForensics());
     }
 
     public void verifyV0AuthenticationMetrics(int successfulV0Authentications)
@@ -150,13 +156,15 @@ public class NioEchoServer extends Thread {
 
     public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate)
             throws InterruptedException {
-        waitForMetric(name, expectedValue, total, rate, null);
+        waitForMetric(name, expectedValue, total, rate, false, false, null);
     }
 
-    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate,
+    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate, boolean avg, boolean max,
             BiFunction<String, String, String> forensics) throws InterruptedException {
         final String totalName = name + "-total";
         final String rateName = name + "-rate";
+        final String avgName = name + "-avg";
+        final String maxName = name + "-max";
         try {
             if (expectedValue == 0.0) {
                 if (total)
@@ -184,6 +192,35 @@ public class NioEchoServer extends Thread {
                 throw e;
             String forensicText = e.getMessage() + ": "
                     + forensics.apply(total ? totalName : null, rate ? rateName : null);
+            throw new AssertionError(forensicText, e);
+        }
+        try {
+            if (expectedValue == 0.0) {
+                if (avg)
+                    assertEquals(expectedValue, metricValue(avgName), EPS);
+                if (max)
+                    assertEquals(Double.NEGATIVE_INFINITY, metricValue(maxName), EPS);
+            } else {
+                if (avg)
+                    TestUtils.waitForCondition(new TestCondition() {
+                        @Override
+                        public boolean conditionMet() {
+                            return metricValue(avgName) > 0.0;
+                        }
+                    }, "Metric not updated " + avgName);
+                if (max)
+                    TestUtils.waitForCondition(new TestCondition() {
+                        @Override
+                        public boolean conditionMet() {
+                            return metricValue(maxName) > 0.0;
+                        }
+                    }, "Metric not updated " + maxName);
+            }
+        } catch (AssertionError e) {
+            if (forensics == null)
+                throw e;
+            String forensicText = e.getMessage() + ": "
+                    + forensics.apply(avg ? avgName : null, max ? maxName : null);
             throw new AssertionError(forensicText, e);
         }
     }

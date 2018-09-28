@@ -704,8 +704,8 @@ private[kafka] class Processor(val id: Int,
         openOrClosingChannel(receive.source) match {
           case Some(channel) =>
             val header = RequestHeader.parse(receive.payload)
-            if (header.apiKey() == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive))
-              trace(s"Re-authenticated: $channel")
+            if (header.apiKey() == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive, time.milliseconds))
+              trace(s"Begin re-authentication: $channel")
             else {
               if (channel.serverAuthenticationSessionExpired(time.nanoseconds)) {
                 channel.disconnect()

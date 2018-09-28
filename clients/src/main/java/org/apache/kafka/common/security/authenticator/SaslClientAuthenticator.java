@@ -116,6 +116,8 @@ public class SaslClientAuthenticator implements Authenticator {
     private ApiVersionsResponse apiVersionsResponse = null;
     private Long positiveSessionReauthMs = null;
     private boolean reauthenticating = false;
+    private long reauthenticationBeginMs;
+    private long authenticationEndMs;
     private final Time time;
     private Long clientSessionReauthenticationTimeMs = null;
 
@@ -259,6 +261,7 @@ public class SaslClientAuthenticator implements Authenticator {
         apiVersionsResponse = ((SaslClientAuthenticator) previousAuthenticator).apiVersionsResponse;
         netInBuffer = reauthenticationContext.inProgressResponse();
         reauthenticating = true;
+        reauthenticationBeginMs = reauthenticationContext.reauthenticationStartMs();
         authenticate();
     }
 
@@ -272,6 +275,11 @@ public class SaslClientAuthenticator implements Authenticator {
     @Override
     public Long clientSessionReauthenticationTimeMs() {
         return clientSessionReauthenticationTimeMs;
+    }
+
+    @Override
+    public Long reauthenticationTimeMs() {
+        return reauthenticating ? Long.valueOf(authenticationEndMs - reauthenticationBeginMs) : null;
     }
 
     private RequestHeader nextRequestHeader(ApiKeys apiKey, short version) {
@@ -305,21 +313,21 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     private void completeAuthentication() {
-        long sessionBeginTimeMs = time.milliseconds();
+        authenticationEndMs = time.milliseconds();
         if (positiveSessionReauthMs != null) {
             // pick a random percentage between 85% and 95% for session re-authentication
             double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
             double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
             double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount + RNG.nextDouble()
                     * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
-            clientSessionReauthenticationTimeMs = sessionBeginTimeMs
+            clientSessionReauthenticationTimeMs = authenticationEndMs
                     + (long) (positiveSessionReauthMs.longValue() * pctToUse);
         }
         LOG.debug("{} at {} with {} and {}", reauthenticating ? "Re-authenticated" : "Authenticated",
-                new Date(sessionBeginTimeMs),
+                new Date(authenticationEndMs),
                 clientSessionReauthenticationTimeMs == null ? "no session expiration"
                         : ("session expiration "
-                                + new Date(sessionBeginTimeMs + positiveSessionReauthMs.longValue())),
+                                + new Date(authenticationEndMs + positiveSessionReauthMs.longValue())),
                 clientSessionReauthenticationTimeMs == null ? "no session re-authentication"
                         : ("session re-authentication on or after "
                                 + new Date(clientSessionReauthenticationTimeMs.longValue())));

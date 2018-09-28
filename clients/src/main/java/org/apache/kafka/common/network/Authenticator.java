@@ -106,6 +106,21 @@ public interface Authenticator extends Closeable {
     }
 
     /**
+     * Return the number of milliseconds that elapsed while re-authenticating this
+     * session from the perspective of this instance, if applicable, otherwise null.
+     * The server-side perspective will yield a lower value than the client-side
+     * perspective of the same re-authentication because the client-side observes an
+     * additional network round-trip.
+     * 
+     * @return the number of milliseconds that elapsed while re-authenticating this
+     *         session from the perspective of this instance, if applicable,
+     *         otherwise null
+     */
+    default Long reauthenticationTimeMs() {
+        return null;
+    }
+
+    /**
      * Return the client-side {@link NetworkReceive} responses that arrived during
      * re-authentication that are unrelated to re-authentication, if any, otherwise
      * null. These correspond to requests sent prior to the beginning of

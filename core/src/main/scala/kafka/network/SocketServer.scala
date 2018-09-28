@@ -549,6 +549,8 @@ private[kafka] class Processor(val id: Int,
     // also includes the listener name)
     Map(NetworkProcessorMetricTag -> id.toString)
   )
+  
+  val expiredConnectionsKilledCount = newCounter("ExpiredConnectionsKilledCount")
 
   private val selector = createSelector(
     ChannelBuilders.serverChannelBuilder(listenerName,
@@ -708,7 +710,7 @@ private[kafka] class Processor(val id: Int,
               if (channel.serverAuthenticationSessionExpired(time.nanoseconds)) {
                 channel.disconnect()
                 debug(s"Disconnected expired channel: $channel")
-                // TODO: metric
+                expiredConnectionsKilledCount.inc()
                 throw new RuntimeException("Disconnected expired session: " + channel + "; " + header)
               }
               val connectionId = receive.source

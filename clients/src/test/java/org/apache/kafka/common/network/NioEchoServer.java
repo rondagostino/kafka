@@ -161,10 +161,14 @@ public class NioEchoServer extends Thread {
 
     public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate, boolean avg, boolean max,
             BiFunction<String, String, String> forensics) throws InterruptedException {
+        waitForTotalAndRateMetrics(name, expectedValue, total, rate, forensics);
+        waitForAvgAndMaxMetrics(name, expectedValue, avg, max, forensics);
+    }
+
+    public void waitForTotalAndRateMetrics(String name, final double expectedValue, boolean total, boolean rate,
+            BiFunction<String, String, String> forensics) throws InterruptedException {
         final String totalName = name + "-total";
         final String rateName = name + "-rate";
-        final String avgName = name + "-avg";
-        final String maxName = name + "-max";
         try {
             if (expectedValue == 0.0) {
                 if (total)
@@ -194,6 +198,12 @@ public class NioEchoServer extends Thread {
                     + forensics.apply(total ? totalName : null, rate ? rateName : null);
             throw new AssertionError(forensicText, e);
         }
+    }
+
+    public void waitForAvgAndMaxMetrics(String name, final double expectedValue, boolean avg, boolean max,
+            BiFunction<String, String, String> forensics) throws InterruptedException {
+        final String avgName = name + "-avg";
+        final String maxName = name + "-max";
         try {
             if (expectedValue == 0.0) {
                 if (avg)

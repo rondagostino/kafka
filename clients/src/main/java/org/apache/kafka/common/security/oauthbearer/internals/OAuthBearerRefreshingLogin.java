@@ -96,19 +96,34 @@ public class OAuthBearerRefreshingLogin implements Login {
                 classToSynchronizeOnPriorToRefresh) {
             @Override
             public ExpiringCredential expiringCredential() {
-                // convert to ExpiringCredential if necessary so it is refreshed
-                ExpiringCredential retvalExpiringCredential = super.expiringCredential();
-                if (retvalExpiringCredential != null)
-                    return retvalExpiringCredential;
                 Set<OAuthBearerToken> privateCredentialTokens = expiringCredentialRefreshingLogin.subject()
                         .getPrivateCredentials(OAuthBearerToken.class);
                 if (privateCredentialTokens.isEmpty())
                     return null;
                 final OAuthBearerToken token = privateCredentialTokens.iterator().next();
-                log.debug("Found expiring credential (OAuth 2 Bearer Token) with principal '{}'.",
-                        token.principalName());
-                return token instanceof ExpiringCredential ? (ExpiringCredential) token
-                        : new OAuthBearerTokenExpiringCredential(token);
+                if (log.isDebugEnabled())
+                    log.debug("Found expiring credential with principal '{}'.", token.principalName());
+                return new ExpiringCredential() {
+                    @Override
+                    public String principalName() {
+                        return token.principalName();
+                    }
+
+                    @Override
+                    public Long startTimeMs() {
+                        return token.startTimeMs();
+                    }
+
+                    @Override
+                    public long expireTimeMs() {
+                        return token.lifetimeMs();
+                    }
+
+                    @Override
+                    public Long absoluteLastRefreshTimeMs() {
+                        return null;
+                    }
+                };
             }
         };
     }

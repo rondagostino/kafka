@@ -19,17 +19,14 @@ package org.apache.kafka.common.security.oauthbearer.internals.expiring;
 import java.util.Date;
 import java.util.Objects;
 import java.util.Random;
-import java.util.Set;
 
 import javax.security.auth.Subject;
 import javax.security.auth.login.Configuration;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
 
-import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.Login;
-import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 import org.apache.kafka.common.utils.KafkaThread;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
@@ -37,39 +34,10 @@ import org.slf4j.LoggerFactory;
 
 /**
  * This class is responsible for refreshing logins for both Kafka client and
- * server when the credential implements {@link ExpiringCredential}. Such
- * credentials have a limited lifetime, and an instance of this class
- * periodically refreshes them so that the client can create new connections to
- * brokers on an ongoing basis.
- * <p>
- * The parameters that impact how the refresh algorithm operates are specified
- * as part of the producer/consumer/broker configuration and are as follows. See
- * the documentation for these properties elsewhere for details.
- * <table>
- * <tr>
- * <th>Producer/Consumer/Broker Configuration Property</th>
- * </tr>
- * <tr>
- * <td>{@code sasl.login.refresh.window.factor}</td>
- * </tr>
- * <tr>
- * <td>{@code sasl.login.refresh.window.jitter}</td>
- * </tr>
- * <tr>
- * <td>{@code sasl.login.refresh.min.period.seconds}</td>
- * </tr>
- * <tr>
- * <td>{@code sasl.login.refresh.min.buffer.seconds}</td>
- * </tr>
- * </table>
- * 
- * @see OAuthBearerLoginModule
- * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_FACTOR_DOC
- * @see SaslConfigs#SASL_LOGIN_REFRESH_WINDOW_JITTER_DOC
- * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
- * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
+ * server when the login is a type that has a limited lifetime/will expire. The
+ * credentials for the login must implement {@link ExpiringCredential}.
  */
-public class ExpiringCredentialRefreshingLogin {
+public abstract class ExpiringCredentialRefreshingLogin {
     /**
      * Class that can be overridden for testing
      */
@@ -101,63 +69,55 @@ public class ExpiringCredentialRefreshingLogin {
     private class Refresher implements Runnable {
         @Override
         public void run() {
-            try {
-                log.info("[Principal={}]: Expiring credential re-login thread started.", principalLogText());
+            log.info("[Principal={}]: Expiring credential re-login thread started.", principalLogText());
+            while (true) {
+                /*
+                 * Refresh thread's main loop. Each expiring credential lives for one iteration
+                 * of the loop. Thread will exit if the loop exits from here.
+                 */
+                long nowMs = currentMs();
+                Long nextRefreshMs = refreshMs(nowMs);
+                if (nextRefreshMs == null) {
+                    loginContextFactory.refresherThreadDone();
+                    return;
+                }
+                log.info("[Principal={}]: Expiring credential re-login sleeping until: {}", principalLogText(),
+                        new Date(nextRefreshMs));
+                time.sleep(nextRefreshMs - nowMs);
+                if (Thread.currentThread().isInterrupted()) {
+                    log.info("[Principal={}]: Expiring credential re-login thread has been interrupted and will exit.",
+                            principalLogText());
+                    loginContextFactory.refresherThreadDone();
+                    return;
+                }
                 while (true) {
                     /*
-                     * Refresh thread's main loop. Each expiring credential lives for one iteration
-                     * of the loop. Thread will exit if the loop exits from here.
+                     * Perform a re-login over and over again with some intervening delay
+                     * unless/until either the refresh succeeds or we are interrupted.
                      */
-                    long nowMs = currentMs();
-                    Long nextRefreshMs = refreshMs(nowMs);
-                    if (nextRefreshMs == null) {
+                    try {
+                        reLogin();
+                        break; // success
+                    } catch (ExitRefresherThreadDueToIllegalStateException e) {
+                        log.error(e.getMessage(), e);
                         loginContextFactory.refresherThreadDone();
                         return;
-                    }
-                    log.info("[Principal={}]: Expiring credential re-login sleeping until: {}", principalLogText(),
-                            new Date(nextRefreshMs));
-                    time.sleep(nextRefreshMs - nowMs);
-                    if (Thread.currentThread().isInterrupted()) {
-                        log.info(
-                                "[Principal={}]: Expiring credential re-login thread has been interrupted and will exit.",
-                                principalLogText());
-                        loginContextFactory.refresherThreadDone();
-                        return;
-                    }
-                    ExpiringCredential expiringCredentialPriorToReLogin = expiringCredential;
-                    while (true) {
-                        /*
-                         * Perform a re-login over and over again with some intervening delay
-                         * unless/until either the refresh succeeds or we are interrupted.
-                         */
-                        try {
-                            reLogin();
-                            break; // success
-                        } catch (LoginException loginException) {
-                            log.warn(String.format(
-                                    "[Principal=%s]: LoginException during login retry; will sleep %d seconds before trying again.",
-                                    principalLogText(), DELAY_SECONDS_BEFORE_NEXT_RETRY_WHEN_RELOGIN_FAILS),
-                                    loginException);
-                            // Sleep and allow loop to run/try again unless interrupted
-                            time.sleep(DELAY_SECONDS_BEFORE_NEXT_RETRY_WHEN_RELOGIN_FAILS * 1000);
-                            if (Thread.currentThread().isInterrupted()) {
-                                log.error(
-                                        "[Principal={}]: Interrupted while trying to perform a subsequent expiring credential re-login after one or more initial re-login failures: re-login thread exiting now: {}",
-                                        principalLogText(), String.valueOf(loginException.getMessage()));
-                                loginContextFactory.refresherThreadDone();
-                                return;
-                            }
+                    } catch (LoginException loginException) {
+                        log.warn(String.format(
+                                "[Principal=%s]: LoginException during login retry; will sleep %d seconds before trying again.",
+                                principalLogText(), DELAY_SECONDS_BEFORE_NEXT_RETRY_WHEN_RELOGIN_FAILS),
+                                loginException);
+                        // Sleep and allow loop to run/try again unless interrupted
+                        time.sleep(DELAY_SECONDS_BEFORE_NEXT_RETRY_WHEN_RELOGIN_FAILS * 1000);
+                        if (Thread.currentThread().isInterrupted()) {
+                            log.error(
+                                    "[Principal={}]: Interrupted while trying to perform a subsequent expiring credential re-login after one or more initial re-login failures: re-login thread exiting now: {}",
+                                    principalLogText(), String.valueOf(loginException.getMessage()));
+                            loginContextFactory.refresherThreadDone();
+                            return;
                         }
                     }
-                    log.debug("Refreshed expiring credential from {} expiring at {} to {} expiring at {}",
-                            expiringCredentialPriorToReLogin.principalName(),
-                            new Date(expiringCredentialPriorToReLogin.expireTimeMs()),
-                            expiringCredential.principalName(), new Date(expiringCredential.expireTimeMs()));
                 }
-            } catch (ExitRefresherThreadDueToIllegalStateException e) {
-                log.error(e.getMessage(), e);
-                loginContextFactory.refresherThreadDone();
-                return;
             }
         }
     }
@@ -177,8 +137,7 @@ public class ExpiringCredentialRefreshingLogin {
     // mark volatile due to existence of public subject() method
     private volatile Subject subject = null;
     private boolean hasExpiringCredential = false;
-    private String originalPrincipalName = null;
-    private String currentPrincipalName = null;
+    private String principalName = null;
     private LoginContext loginContext = null;
     private ExpiringCredential expiringCredential = null;
     private final Class<?> mandatoryClassToSynchronizeOnPriorToRefresh;
@@ -244,14 +203,12 @@ public class ExpiringCredentialRefreshingLogin {
         if (!hasExpiringCredential) {
             // do not bother with re-logins.
             log.debug("No Expiring Credential");
-            originalPrincipalName = null;
-            currentPrincipalName = null;
+            principalName = null;
             refresherThread = null;
             return loginContext;
         }
 
-        originalPrincipalName = expiringCredential.principalName();
-        currentPrincipalName = originalPrincipalName;
+        principalName = expiringCredential.principalName();
 
         // Check for a clock skew problem
         long expireTimeMs = expiringCredential.expireTimeMs();
@@ -273,7 +230,7 @@ public class ExpiringCredentialRefreshingLogin {
          * Re-login periodically. How often is determined by the expiration date of the
          * credential and refresh-related configuration values.
          */
-        refresherThread = KafkaThread.daemon(String.format("kafka-expiring-relogin-thread-%s", originalPrincipalName),
+        refresherThread = KafkaThread.daemon(String.format("kafka-expiring-relogin-thread-%s", principalName),
                 new Refresher());
         refresherThread.start();
         loginContextFactory.refresherThreadStarted();
@@ -293,14 +250,7 @@ public class ExpiringCredentialRefreshingLogin {
         }
     }
 
-    public ExpiringCredential expiringCredential() {
-        Set<ExpiringCredential> expiringCredentials = subject().getPrivateCredentials(ExpiringCredential.class);
-        if (expiringCredentials.isEmpty())
-            return null;
-        ExpiringCredential retvalExpiringCredential = expiringCredentials.iterator().next();
-        log.debug("Found expiring credential with principal '{}'.", retvalExpiringCredential.principalName());
-        return retvalExpiringCredential;
-    }
+    public abstract ExpiringCredential expiringCredential();
 
     /**
      * Determine when to sleep until before performing a refresh
@@ -311,12 +261,19 @@ public class ExpiringCredentialRefreshingLogin {
      * @return null if no refresh should occur, otherwise the time to sleep until
      *         (in terms of the number of milliseconds since the epoch) before
      *         performing a refresh
-     * @throws ExitRefresherThreadDueToIllegalStateException
-     *             if there is no expiring credential to refresh
      */
-    private Long refreshMs(long relativeToMs) throws ExitRefresherThreadDueToIllegalStateException {
-        if (expiringCredential == null)
-            throw new ExitRefresherThreadDueToIllegalStateException("No Expiring credential found");
+    private Long refreshMs(long relativeToMs) {
+        if (expiringCredential == null) {
+            /*
+             * Re-login failed because our login() invocation did not generate a credential
+             * but also did not generate an exception. Try logging in again after some delay
+             * (it seems likely to be a bug, but it doesn't hurt to keep trying to refresh).
+             */
+            long retvalNextRefreshMs = relativeToMs + DELAY_SECONDS_BEFORE_NEXT_RETRY_WHEN_RELOGIN_FAILS * 1000L;
+            log.warn("[Principal={}]: No Expiring credential found: will try again at {}", principalLogText(),
+                    new Date(retvalNextRefreshMs));
+            return retvalNextRefreshMs;
+        }
         long expireTimeMs = expiringCredential.expireTimeMs();
         if (relativeToMs > expireTimeMs) {
             boolean logoutRequiredBeforeLoggingBackIn = isLogoutRequiredBeforeLoggingBackIn();
@@ -419,8 +376,8 @@ public class ExpiringCredentialRefreshingLogin {
             ExpiringCredential optionalCredentialToLogout = expiringCredential;
             LoginContext optionalLoginContextToLogout = loginContext;
             loginContext = loginContextFactory.createLoginContext(ExpiringCredentialRefreshingLogin.this);
-            log.debug("Initiating re-login for {}, logout() still needs to be called on a previous login = {}",
-                    currentPrincipalName, optionalCredentialToLogout != null);
+            log.info("Initiating re-login for {}, logout() still needs to be called on a previous login = {}",
+                    principalName, optionalCredentialToLogout != null);
             loginContext.login();
             // Perform a logout() on any original credential if necessary
             if (optionalCredentialToLogout != null)
@@ -438,10 +395,8 @@ public class ExpiringCredentialRefreshingLogin {
                  * instead we will allow login retries in case we can somehow fix the issue (it
                  * seems likely to be a bug, but it doesn't hurt to keep trying to refresh).
                  */
-                String errMsg = "No Expiring Credential after a supposedly-successful re-login";
-                log.error(errMsg);
-                currentPrincipalName = null;
-                throw new LoginException(errMsg);
+                log.error("No Expiring Credential after a supposedly-successful re-login");
+                principalName = null;
             } else {
                 if (expiringCredential == optionalCredentialToLogout)
                     /*
@@ -451,7 +406,7 @@ public class ExpiringCredentialRefreshingLogin {
                     throw new ExitRefresherThreadDueToIllegalStateException(String.format(
                             "Subject's private credentials still contains the previous, soon-to-expire instance of %s even though login() followed by logout() was invoked; exiting refresh thread",
                             expiringCredential.getClass().getName()));
-                currentPrincipalName = expiringCredential.principalName();
+                principalName = expiringCredential.principalName();
                 if (log.isDebugEnabled())
                     log.debug("[Principal={}]: It is an expiring credential after re-login as expected",
                             principalLogText());
@@ -460,10 +415,8 @@ public class ExpiringCredentialRefreshingLogin {
     }
 
     private String principalLogText() {
-        String prefix = expiringCredential == null ? "" : expiringCredential.getClass().getSimpleName() + ":";
-        String suffix = currentPrincipalName != null ? currentPrincipalName
-                : ("originally " + originalPrincipalName + " now null");
-        return prefix + suffix;
+        return expiringCredential == null ? principalName
+                : expiringCredential.getClass().getSimpleName() + ":" + principalName;
     }
 
     private long currentMs() {

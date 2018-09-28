@@ -34,7 +34,6 @@ import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
 import org.apache.kafka.common.security.authenticator.TestJaasConfig;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerTokenCallback;
-import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerTokenExpiringCredential;
 import org.apache.kafka.common.utils.MockTime;
 import org.junit.Test;
 
@@ -81,8 +80,7 @@ public class OAuthBearerUnsecuredLoginCallbackHandlerTest {
         OAuthBearerUnsecuredLoginCallbackHandler callbackHandler = createCallbackHandler(options, mockTime);
         OAuthBearerTokenCallback callback = new OAuthBearerTokenCallback();
         callbackHandler.handle(new Callback[] {callback});
-        OAuthBearerUnsecuredJws jws = (OAuthBearerUnsecuredJws) ((OAuthBearerTokenExpiringCredential) callback.token())
-                .underlyingToken();
+        OAuthBearerUnsecuredJws jws = (OAuthBearerUnsecuredJws) callback.token();
         assertNotNull("create token failed", jws);
         long startMs = mockTime.milliseconds();
         confirmCorrectValues(jws, user, startMs, 1000 * 60 * 60);
@@ -91,7 +89,8 @@ public class OAuthBearerUnsecuredLoginCallbackHandlerTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    public void validOptionsWithExplicitOptionValues() throws IOException, UnsupportedCallbackException {
+    public void validOptionsWithExplicitOptionValues()
+            throws IOException, UnsupportedCallbackException {
         String explicitScope1 = "scope1";
         String explicitScope2 = "scope2";
         String explicitScopeClaimName = "putScopeInHere";
@@ -117,8 +116,7 @@ public class OAuthBearerUnsecuredLoginCallbackHandlerTest {
             OAuthBearerUnsecuredLoginCallbackHandler callbackHandler = createCallbackHandler(options, mockTime);
             OAuthBearerTokenCallback callback = new OAuthBearerTokenCallback();
             callbackHandler.handle(new Callback[] {callback});
-            OAuthBearerUnsecuredJws jws = (OAuthBearerUnsecuredJws) ((OAuthBearerTokenExpiringCredential) callback
-                    .token()).underlyingToken();
+            OAuthBearerUnsecuredJws jws = (OAuthBearerUnsecuredJws) callback.token();
             assertNotNull("create token failed", jws);
             long startMs = mockTime.milliseconds();
             confirmCorrectValues(jws, user, startMs, lifetmeSeconds * 1000);

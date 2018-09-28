@@ -39,20 +39,18 @@ import javax.security.sasl.SaslException;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
-import org.apache.kafka.common.security.auth.SaslExtensions;
 import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
+import org.apache.kafka.common.security.auth.SaslExtensions;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerTokenCallback;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerClientInitialResponse;
-import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerTokenExpiringCredential;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * A {@code CallbackHandler} that recognizes {@link OAuthBearerTokenCallback} to
- * return an unsecured OAuth 2 bearer token and {@link SaslExtensionsCallback}
- * to return SASL extensions
+ * A {@code CallbackHandler} that recognizes {@link OAuthBearerTokenCallback}
+ * to return an unsecured OAuth 2 bearer token and {@link SaslExtensionsCallback} to return SASL extensions
  * <p>
  * Claims and their values on the returned token can be specified using
  * {@code unsecuredLoginStringClaim_<claimname>},
@@ -64,9 +62,8 @@ import org.slf4j.LoggerFactory;
  * <p>
  * <p>
  * You can also add custom unsecured SASL extensions using
- * {@code unsecuredLoginExtension_<extensionname>}. Extension keys and values
- * are subject to regex validation. The extension key must also not be equal to
- * the reserved key {@link OAuthBearerClientInitialResponse#AUTH_KEY}
+ * {@code unsecuredLoginExtension_<extensionname>}. Extension keys and values are subject to regex validation.
+ * The extension key must also not be equal to the reserved key {@link OAuthBearerClientInitialResponse#AUTH_KEY}
  * <p>
  * This implementation also accepts the following options:
  * <ul>
@@ -211,7 +208,7 @@ public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCal
                             urlEncoderNoPadding.encodeToString(claimsJson.getBytes(StandardCharsets.UTF_8))),
                     principalClaimName, scopeClaimName);
             log.info("Retrieved token with principal {}", jws.principalName());
-            callback.token(new OAuthBearerTokenExpiringCredential(jws));
+            callback.token(jws);
         } catch (OAuthBearerIllegalTokenException e) {
             // occurs if the principal claim doesn't exist or has an empty value
             throw new OAuthBearerConfigException(e.getMessage(), e);
@@ -219,9 +216,8 @@ public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCal
     }
 
     /**
-     * Add and validate all the configured extensions. Token keys, apart from
-     * passing regex validation, must not be equal to the reserved key
-     * {@link OAuthBearerClientInitialResponse#AUTH_KEY}
+     *  Add and validate all the configured extensions.
+     *  Token keys, apart from passing regex validation, must not be equal to the reserved key {@link OAuthBearerClientInitialResponse#AUTH_KEY}
      */
     private void handleExtensionsCallback(SaslExtensionsCallback callback) {
         Map<String, String> extensions = new HashMap<>();

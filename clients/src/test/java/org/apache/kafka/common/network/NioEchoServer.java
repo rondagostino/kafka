@@ -145,9 +145,9 @@ public class NioEchoServer extends Thread {
         waitForMetric("reauthentication-latency", successfulReuthentications, false, false, true, true, metricForensics());
     }
 
-    public void verifyV0AuthenticationMetrics(int successfulV0Authentications)
+    public void verifyAuthenticationNoReauthMetric(int successfulAuthenticationNoReauths)
             throws InterruptedException {
-        waitForMetric("successful-v0-authentication", successfulV0Authentications, true, false);
+        waitForMetric("successful-authentication-no-reauth", successfulAuthenticationNoReauths, true, false);
     }
 
     public void waitForMetric(String name, final double expectedValue) throws InterruptedException {

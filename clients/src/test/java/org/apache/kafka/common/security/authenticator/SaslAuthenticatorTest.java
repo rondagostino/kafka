@@ -185,7 +185,7 @@ public class SaslAuthenticatorTest {
         server.verifyAuthenticationMetrics(1, 0);
         // don't test latency since it happens so fast it is zero
         server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -203,7 +203,7 @@ public class SaslAuthenticatorTest {
                 "Authentication failed: Invalid username or password");
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -221,7 +221,7 @@ public class SaslAuthenticatorTest {
                 "Authentication failed: Invalid username or password");
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -327,7 +327,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientConnection(securityProtocol, "0");
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetricsIncludingLatency(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -365,7 +365,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -386,7 +386,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -406,13 +406,13 @@ public class SaslAuthenticatorTest {
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
 
         saslClientConfigs.put(SaslConfigs.SASL_MECHANISM, "SCRAM-SHA-512");
         createAndCheckClientConnection(securityProtocol, "2");
         server.verifyAuthenticationMetrics(1, 1);
         server.verifyReauthenticationMetricsIncludingLatency(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -456,7 +456,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientConnectionFailure(securityProtocol, "0");
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
 
         //Check valid token Info and invalid credentials
         KafkaPrincipal owner = SecurityUtils.parseKafkaPrincipal("User:Owner");
@@ -467,14 +467,14 @@ public class SaslAuthenticatorTest {
         createAndCheckClientConnectionFailure(securityProtocol, "0");
         server.verifyAuthenticationMetrics(0, 2);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
 
         //Check with valid token Info and credentials
         updateTokenCredentialCache(tokenId, tokenHmac);
         createAndCheckClientConnection(securityProtocol, "0");
         server.verifyAuthenticationMetrics(1, 2);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0); // token expiration prevents re-authentication
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     @Test
@@ -528,7 +528,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientConnection(securityProtocol, "0", windowExpansionFactor);
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetricsIncludingLatency(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -1014,7 +1014,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientConnectionFailure(securityProtocol, node);
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -1031,7 +1031,7 @@ public class SaslAuthenticatorTest {
         createAndCheckClientConnectionFailure(securityProtocol, node);
         server.verifyAuthenticationMetrics(0, 1);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(0);
+        server.verifyAuthenticationNoReauthMetric(0);
     }
 
     /**
@@ -1171,7 +1171,7 @@ public class SaslAuthenticatorTest {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_PLAINTEXT, "PLAIN");
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(1);
+        server.verifyAuthenticationNoReauthMetric(1);
     }
 
     /**
@@ -1192,7 +1192,7 @@ public class SaslAuthenticatorTest {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_PLAINTEXT, "SCRAM-SHA-256");
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(1);
+        server.verifyAuthenticationNoReauthMetric(1);
     }
 
     /**
@@ -1213,7 +1213,7 @@ public class SaslAuthenticatorTest {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_SSL, "PLAIN");
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(1);
+        server.verifyAuthenticationNoReauthMetric(1);
     }
 
     /**
@@ -1234,7 +1234,7 @@ public class SaslAuthenticatorTest {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_SSL, "SCRAM-SHA-512");
         server.verifyAuthenticationMetrics(1, 0);
         server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyV0AuthenticationMetrics(1);
+        server.verifyAuthenticationNoReauthMetric(1);
     }
 
     /**

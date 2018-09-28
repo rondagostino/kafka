@@ -547,7 +547,7 @@ public class Selector implements Selectable, AutoCloseable {
                                     time.milliseconds());
                         }
                         if (!channel.connectedClientSupportsReauthentication())
-                            sensors.successfulV0Authentication.record();
+                            sensors.successfulAuthenticationNoReauth.record();
                     }
                     Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel
                             .getAndClearResponsesReceivedDuringReauthentication();
@@ -991,7 +991,7 @@ public class Selector implements Selectable, AutoCloseable {
         public final Sensor connectionCreated;
         public final Sensor successfulAuthentication;
         public final Sensor successfulReauthentication;
-        public final Sensor successfulV0Authentication;
+        public final Sensor successfulAuthenticationNoReauth;
         public final Sensor reauthenticationLatency;
         public final Sensor failedAuthentication;
         public final Sensor failedReauthentication;
@@ -1035,18 +1035,12 @@ public class Selector implements Selectable, AutoCloseable {
             this.successfulReauthentication.add(createMeter(metrics, metricGrpName, metricTags,
                     "successful-reauthentication", "successful re-authentication of connections"));
 
-            String successfulV0AuthenticationMetricTagKey = "auth";
-            String successfulV0AuthenticationMetricTagValue = "v0";
-            this.successfulV0Authentication = sensor("successful-v0-authentication:" + tagsSuffix
-                    + successfulV0AuthenticationMetricTagKey + "-" + successfulV0AuthenticationMetricTagValue);
-            // preserve original tag order with LinkedHashMap, and append our tag
-            Map<String, String> successfulV0AuthenticationMetricTags = new LinkedHashMap<>(metricTags);
-            successfulV0AuthenticationMetricTags.put(successfulV0AuthenticationMetricTagKey,
-                    successfulV0AuthenticationMetricTagValue);
-            MetricName successfulV0AuthenticationMetricName = metrics.metricName("successful-v0-authentication-total",
-                    metricGrpName, "The total number of connections with successful version=0 authentication",
-                    successfulV0AuthenticationMetricTags);
-            this.successfulV0Authentication.add(successfulV0AuthenticationMetricName, new Total());
+            this.successfulAuthenticationNoReauth = sensor("successful-authentication-no-reauth:" + tagsSuffix);
+            MetricName successfulAuthenticationNoReauthMetricName = metrics.metricName(
+                    "successful-authentication-no-reauth-total", metricGrpName,
+                    "The total number of connections with successful authentication where the client does not support re-authentication",
+                    metricTags);
+            this.successfulAuthenticationNoReauth.add(successfulAuthenticationNoReauthMetricName, new Total());
 
             this.failedAuthentication = sensor("failed-authentication:" + tagsSuffix);
             this.failedAuthentication.add(createMeter(metrics, metricGrpName, metricTags,

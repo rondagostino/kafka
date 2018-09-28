@@ -433,8 +433,8 @@ public class SaslServerAuthenticator implements Authenticator {
                 byte[] responseToken = saslServer.evaluateResponse(Utils.readBytes(saslAuthenticateRequest.saslAuthBytes()));
                 // For versions with SASL_AUTHENTICATE header, send a response to SASL_AUTHENTICATE request even if token is empty.
                 ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
-                long sessionReauthMs = calcSessionReauthMs();
-                sendKafkaResponse(requestContext, new SaslAuthenticateResponse(Errors.NONE, null, responseBuf, sessionReauthMs));
+                long sessionLifetimeMs = calcSessionLifetimeMs();
+                sendKafkaResponse(requestContext, new SaslAuthenticateResponse(Errors.NONE, null, responseBuf, sessionLifetimeMs));
             } catch (SaslAuthenticationException e) {
                 buildResponseOnAuthenticateFailure(requestContext,
                         new SaslAuthenticateResponse(Errors.SASL_AUTHENTICATION_FAILED, e.getMessage()));
@@ -454,7 +454,7 @@ public class SaslServerAuthenticator implements Authenticator {
         }
     }
 
-    private long calcSessionReauthMs() {
+    private long calcSessionLifetimeMs() {
         long retvalSessionReauthMs = 0L;
         if (saslServer.isComplete()) {
             authenticationEndMs = time.milliseconds();

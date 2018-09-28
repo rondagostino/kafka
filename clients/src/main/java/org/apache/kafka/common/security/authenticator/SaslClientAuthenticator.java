@@ -114,7 +114,7 @@ public class SaslClientAuthenticator implements Authenticator {
     private short saslAuthenticateVersion;
     private Deque<NetworkReceive> pendingAuthenticatedReceives = new ArrayDeque<>();
     private ApiVersionsResponse apiVersionsResponse = null;
-    private Long positiveSessionReauthMs = null;
+    private Long positiveSessionLifetimeMs = null;
     private boolean reauthenticating = false;
     private long reauthenticationBeginMs;
     private long authenticationEndMs;
@@ -314,20 +314,20 @@ public class SaslClientAuthenticator implements Authenticator {
 
     private void completeAuthentication() {
         authenticationEndMs = time.milliseconds();
-        if (positiveSessionReauthMs != null) {
+        if (positiveSessionLifetimeMs != null) {
             // pick a random percentage between 85% and 95% for session re-authentication
             double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
             double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
             double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount + RNG.nextDouble()
                     * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
             clientSessionReauthenticationTimeMs = authenticationEndMs
-                    + (long) (positiveSessionReauthMs.longValue() * pctToUse);
+                    + (long) (positiveSessionLifetimeMs.longValue() * pctToUse);
         }
         LOG.debug("{} at {} with {} and {}", reauthenticating ? "Re-authenticated" : "Authenticated",
                 new Date(authenticationEndMs),
                 clientSessionReauthenticationTimeMs == null ? "no session expiration"
                         : ("session expiration "
-                                + new Date(authenticationEndMs + positiveSessionReauthMs.longValue())),
+                                + new Date(authenticationEndMs + positiveSessionLifetimeMs.longValue())),
                 clientSessionReauthenticationTimeMs == null ? "no session re-authentication"
                         : ("session re-authentication on or after "
                                 + new Date(clientSessionReauthenticationTimeMs.longValue())));
@@ -421,9 +421,9 @@ public class SaslClientAuthenticator implements Authenticator {
                     String errMsg = response.errorMessage();
                     throw errMsg == null ? error.exception() : error.exception(errMsg);
                 }
-                long sessionReauthMs = response.sessionReauthMs();
-                if (sessionReauthMs > 0L)
-                    this.positiveSessionReauthMs = Long.valueOf(sessionReauthMs);
+                long sessionLifetimeMs = response.sessionLifetimeMs();
+                if (sessionLifetimeMs > 0L)
+                    this.positiveSessionLifetimeMs = Long.valueOf(sessionLifetimeMs);
                 return Utils.readBytes(response.saslAuthBytes());
             } else
                 return null;

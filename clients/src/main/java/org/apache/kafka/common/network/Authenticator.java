@@ -64,7 +64,7 @@ public interface Authenticator extends Closeable {
      * authentication. Any in-flight responses from prior requests can/will be read
      * and collected for later processing as required. There must not be partially
      * written requests; any request queued for writing (for which zero bytes have
-     * been written) remains queued until after re-authentication succeeds. .
+     * been written) remains queued until after re-authentication succeeds.
      * 
      * @throws AuthenticationException
      *             if authentication fails due to invalid credentials or other
@@ -116,7 +116,7 @@ public interface Authenticator extends Closeable {
      *         session from the perspective of this instance, if applicable,
      *         otherwise null
      */
-    default Long reauthenticationTimeMs() {
+    default Long reauthenticationElapsedTimeMs() {
         return null;
     }
 

@@ -278,7 +278,7 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     @Override
-    public Long reauthenticationTimeMs() {
+    public Long reauthenticationElapsedTimeMs() {
         return reauthenticating ? Long.valueOf(authenticationEndMs - reauthenticationBeginMs) : null;
     }
 

@@ -513,7 +513,7 @@ public class KafkaChannel {
      *         session, if applicable, otherwise null
      */
     public Long reauthenticationLatencyMs() {
-        return authenticator.reauthenticationTimeMs();
+        return authenticator.reauthenticationElapsedTimeMs();
     }
 
     /**

@@ -305,9 +305,6 @@ class RequestChannel(val queueSize: Int) extends KafkaMetricsGroup {
     removeMetric(ResponseQueueSizeMetric, Map(ProcessorMetricTag -> processorId.toString))
   }
 
-  def kafkaChannel(request: Request) : Option[KafkaChannel] =
-    processors.get(request.processor).openOrClosingChannel(request.context.connectionId)
-
 /** Send a request to be handled, potentially blocking until there is room in the queue for the request */
   def sendRequest(request: RequestChannel.Request) {
     requestQueue.put(request)

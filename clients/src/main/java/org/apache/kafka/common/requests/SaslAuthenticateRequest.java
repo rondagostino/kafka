@@ -40,7 +40,7 @@ public class SaslAuthenticateRequest extends AbstractRequest {
     private static final Schema SASL_AUTHENTICATE_REQUEST_V0 = new Schema(
             new Field(SASL_AUTH_BYTES_KEY_NAME, BYTES, "SASL authentication bytes from client as defined by the SASL mechanism."));
 
-    /* v1 request is the same as v0; session_reauth_ms has been added to the response */
+    /* v1 request is the same as v0; session_lifetime_ms has been added to the response */
     private static final Schema SASL_AUTHENTICATE_REQUEST_V1 = SASL_AUTHENTICATE_REQUEST_V0;
 
     public static Schema[] schemaVersions() {

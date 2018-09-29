@@ -43,7 +43,7 @@ public final class JaasUtils {
      * the credential, in terms of milliseconds since the epoch, is available via a
      * negotiated property on the SASL Server instance, and that value can be
      * converted to a session length by subtracting the time at which authentication
-     * occurred. This value is the negotiated property key that is used to
+     * occurred. This variable defines the negotiated property key that is used to
      * communicate the credential lifetime in milliseconds since the epoch.
      */
     public static final String CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY = "CREDENTIAL.LIFETIME.MS";

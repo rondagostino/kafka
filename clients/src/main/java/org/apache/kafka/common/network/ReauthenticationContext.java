@@ -26,7 +26,7 @@ public class ReauthenticationContext {
     private final NetworkReceive saslHandshakeReceive;
     private final Authenticator previousAuthenticator;
     private final NetworkReceive inProgressResponse;
-    private final long reauthenticationStartMs;
+    private final long reauthenticationBeginMs;
 
     /**
      * Constructor to be used on the server-side
@@ -36,7 +36,8 @@ public class ReauthenticationContext {
      *            {@code SaslHandshakeRequest} that has been received on the server
      *            and that initiates re-authentication.
      * @param now
-     *            the current time in milliseconds since the epoch
+     *            the current time in milliseconds since the epoch. This defines the
+     *            moment when re-authentication begins.
      */
     public ReauthenticationContext(NetworkReceive saslHandshakeReceive, long now) {
         this(Objects.requireNonNull(saslHandshakeReceive), null, null, now);
@@ -51,7 +52,8 @@ public class ReauthenticationContext {
      * @param inProgressResponse
      *            a response that has been partially read, if any, otherwise null
      * @param now
-     *            the current time in milliseconds since the epoch
+     *            the current time in milliseconds since the epoch. This defines the
+     *            moment when re-authentication begins.
      */
     public ReauthenticationContext(Authenticator previousAuthenticator, NetworkReceive inProgressResponse, long now) {
         this(null, Objects.requireNonNull(previousAuthenticator), inProgressResponse, now);
@@ -92,14 +94,13 @@ public class ReauthenticationContext {
     }
 
     /**
-     * Return the time when re-authentication started, in milliseconds since the
-     * epoch
+     * Return the time when re-authentication began, in milliseconds since the epoch
      * 
-     * @return the time when re-authentication started, in milliseconds since the
+     * @return the time when re-authentication began, in milliseconds since the
      *         epoch
      */
-    public long reauthenticationStartMs() {
-        return reauthenticationStartMs;
+    public long reauthenticationBeginMs() {
+        return reauthenticationBeginMs;
     }
 
     private ReauthenticationContext(NetworkReceive saslHandshakeReceive, Authenticator previousAuthenticator,
@@ -107,6 +108,6 @@ public class ReauthenticationContext {
         this.saslHandshakeReceive = saslHandshakeReceive;
         this.previousAuthenticator = previousAuthenticator;
         this.inProgressResponse = inProgressResponse;
-        this.reauthenticationStartMs = now;
+        this.reauthenticationBeginMs = now;
     }
 }

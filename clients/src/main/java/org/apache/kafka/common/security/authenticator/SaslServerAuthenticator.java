@@ -337,7 +337,7 @@ public class SaslServerAuthenticator implements Authenticator {
         netInBuffer = saslHandshakeReceive;
         saslHandshakeReauthenticationReceive = saslHandshakeReceive;
         reauthenticating = true;
-        reauthenticationBeginMs = reauthenticationContext.reauthenticationStartMs();
+        reauthenticationBeginMs = reauthenticationContext.reauthenticationBeginMs();
         LOG.debug("Beginning re-authentication: {}", this);
         authenticate();
     }

@@ -261,7 +261,7 @@ public class SaslClientAuthenticator implements Authenticator {
         apiVersionsResponse = ((SaslClientAuthenticator) previousAuthenticator).apiVersionsResponse;
         netInBuffer = reauthenticationContext.inProgressResponse();
         reauthenticating = true;
-        reauthenticationBeginMs = reauthenticationContext.reauthenticationStartMs();
+        reauthenticationBeginMs = reauthenticationContext.reauthenticationBeginMs();
         authenticate();
     }
 

@@ -433,7 +433,7 @@ public class SaslServerAuthenticator implements Authenticator {
                 byte[] responseToken = saslServer.evaluateResponse(Utils.readBytes(saslAuthenticateRequest.saslAuthBytes()));
                 // For versions with SASL_AUTHENTICATE header, send a response to SASL_AUTHENTICATE request even if token is empty.
                 ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
-                long sessionLifetimeMs = calcSessionLifetimeMs();
+                long sessionLifetimeMs = calcSessionLifetimeAndMaybeAuthenticationEndAndSessionExpirationTimes();
                 sendKafkaResponse(requestContext, new SaslAuthenticateResponse(Errors.NONE, null, responseBuf, sessionLifetimeMs));
             } catch (SaslAuthenticationException e) {
                 buildResponseOnAuthenticateFailure(requestContext,
@@ -454,8 +454,8 @@ public class SaslServerAuthenticator implements Authenticator {
         }
     }
 
-    private long calcSessionLifetimeMs() {
-        long retvalSessionReauthMs = 0L;
+    private long calcSessionLifetimeAndMaybeAuthenticationEndAndSessionExpirationTimes() {
+        long retvalSessionLifetimeMs = 0L;
         if (saslServer.isComplete()) {
             authenticationEndMs = time.milliseconds();
             long authenticationTimeNanos = time.nanoseconds();
@@ -464,17 +464,17 @@ public class SaslServerAuthenticator implements Authenticator {
             Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
             if (saslServerConectionLifetimeMs != null || connectionsMaxReauthMs != null) {
                 if (saslServerConectionLifetimeMs == null)
-                    retvalSessionReauthMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
+                    retvalSessionLifetimeMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
                 else if (connectionsMaxReauthMs == null)
-                    retvalSessionReauthMs = zeroIfNegative(
+                    retvalSessionLifetimeMs = zeroIfNegative(
                             saslServerConectionLifetimeMs.longValue() - authenticationEndMs);
                 else
-                    retvalSessionReauthMs = zeroIfNegative(
+                    retvalSessionLifetimeMs = zeroIfNegative(
                             Math.min(saslServerConectionLifetimeMs.longValue() - authenticationEndMs,
                                     connectionsMaxReauthMs.longValue()));
-                if (retvalSessionReauthMs > 0L)
+                if (retvalSessionLifetimeMs > 0L)
                     sessionExpirationTimeNanos = Long
-                            .valueOf(authenticationTimeNanos + 1000 * 1000 * retvalSessionReauthMs);
+                            .valueOf(authenticationTimeNanos + 1000 * 1000 * retvalSessionLifetimeMs);
             }
             LOG.debug(
                     "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); session expiration = {} ({} ms), sending {} ms to client",
@@ -483,10 +483,11 @@ public class SaslServerAuthenticator implements Authenticator {
                     saslServerConectionLifetimeMs != null
                             ? Long.valueOf(saslServerConectionLifetimeMs.longValue() - authenticationEndMs)
                             : null,
-                    sessionExpirationTimeNanos != null ? new Date(authenticationEndMs + retvalSessionReauthMs) : "N/A",
-                    sessionExpirationTimeNanos != null ? retvalSessionReauthMs : "N/A", retvalSessionReauthMs);
+                    sessionExpirationTimeNanos != null ? new Date(authenticationEndMs + retvalSessionLifetimeMs)
+                            : "N/A",
+                    sessionExpirationTimeNanos != null ? retvalSessionLifetimeMs : "N/A", retvalSessionLifetimeMs);
         }
-        return retvalSessionReauthMs;
+        return retvalSessionLifetimeMs;
     }
 
     private static long zeroIfNegative(long value) {

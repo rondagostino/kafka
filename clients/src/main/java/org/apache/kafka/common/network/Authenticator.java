@@ -78,11 +78,13 @@ public interface Authenticator extends Closeable {
 
     /**
      * Return the session expiration time, if any, otherwise null. The value is in
-     * nanoseconds as per {@link System#nanoTime()} and is therefore only useful
+     * nanoseconds as per {@code System.nanoTime()} and is therefore only useful
      * when compared to such a value -- it's absolute value is meaningless. This
      * value may be non-null only on the server-side. It represents the time after
      * which, in the absence of re-authentication, the broker will close the session
-     * if it receives a request unrelated to authentication.
+     * if it receives a request unrelated to authentication. We store nanoseconds
+     * here to avoid having to invoke the more expensive {@code milliseconds()} call
+     * on the broker for every request
      * 
      * @return the session expiration time, if any, otherwise null
      */
@@ -138,10 +140,10 @@ public interface Authenticator extends Closeable {
     
     /**
      * Return true if this is a server-side authenticator and the connected client
-     * supports re-authentication, otherwise false
+     * has indicated that it supports re-authentication, otherwise false
      * 
      * @return true if this is a server-side authenticator and the connected client
-     *         supports re-authentication, otherwise false
+     *         has indicated that it supports re-authentication, otherwise false
      */
     default boolean connectedClientSupportsReauthentication() {
         return false;

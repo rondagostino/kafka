@@ -118,8 +118,9 @@ public class KafkaChannel {
     private ChannelMuteState muteState;
     private ChannelState state;
     private int successfulAuthentications = 0;
+    // At least one -- and possibly both -- of these next two values will be null
     private Long clientSessionReauthenticationTimeMs = null;
-    private Long serverAuthenticationSessionExpirationTimeNanos = null;
+    private Long serverSessionExpirationTimeNanos = null;
     private boolean midWrite = false;
 
     public KafkaChannel(String id, TransportLayer transportLayer, Supplier<Authenticator> authenticatorCreator, int maxReceiveSize, MemoryPool memoryPool) {
@@ -175,7 +176,7 @@ public class KafkaChannel {
             ++successfulAuthentications;
             // At least one -- and possibly both -- of these next two values will be null
             clientSessionReauthenticationTimeMs = authenticator.clientSessionReauthenticationTimeMs();
-            serverAuthenticationSessionExpirationTimeNanos = authenticator.serverSessionExpirationTimeNanos();
+            serverSessionExpirationTimeNanos = authenticator.serverSessionExpirationTimeNanos();
             state = ChannelState.READY;
         }
     }
@@ -450,8 +451,8 @@ public class KafkaChannel {
 
     /**
      * If this is a server-side connection that is ready for use (i.e. authenticated
-     * and operational) then re-authenticate the connection and return true,
-     * otherwise return false
+     * and operational) then begin the process of re-authenticating the connection
+     * and return true, otherwise return false
      * 
      * @param saslHandshakeNetworkReceive
      *            the mandatory {@link NetworkReceive} containing the
@@ -460,8 +461,8 @@ public class KafkaChannel {
      * @param now
      *            the current time in milliseconds since the epoch
      * @return true if this is a server-side connection that is ready for use (i.e.
-     *         authenticated and operational) and it successfully re-authenticates,
-     *         otherwise false
+     *         authenticated and operational) to indicate that the re-authentication
+     *         process has begun, otherwise false
      * @throws AuthenticationException
      *             if re-authentication fails due to invalid credentials or other
      *             security configuration errors
@@ -470,7 +471,7 @@ public class KafkaChannel {
      */
     public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive, long now)
             throws AuthenticationException, IOException {
-        if (serverAuthenticationSessionExpirationTimeNanos == null || !ready())
+        if (serverSessionExpirationTimeNanos == null || !ready())
             return false;
         swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(saslHandshakeNetworkReceive, now));
         return true;
@@ -479,16 +480,15 @@ public class KafkaChannel {
     /**
      * If this is a client-side connection that is ready for use (i.e. authenticated
      * and operational) and there is both a session expiration time defined that has
-     * past and no writes are in progress then re-authenticate the connection and
-     * return true, otherwise return false
+     * past and no writes are in progress then begin the process of
+     * re-authenticating the connection and return true, otherwise return false
      * 
      * @param now
      *            the current time in milliseconds since the epoch
-     * @return this is a client-side connection that is ready for use (i.e.
+     * @return true if this is a client-side connection that is ready for use (i.e.
      *         authenticated and operational) and there is both a session expiration
-     *         time defined that has past and no writes are in progress then
-     *         re-authenticate the connection and return true, otherwise return
-     *         false
+     *         time defined that has past and no writes are in progress to indicate
+     *         that the re-authentication process has begun, otherwise false
      * @throws AuthenticationException
      *             if re-authentication fails due to invalid credentials or other
      *             security configuration errors
@@ -506,11 +506,15 @@ public class KafkaChannel {
     }
     
     /**
-     * Return the number of milliseconds spent re-authenticating this client-side
-     * session, if applicable, otherwise null
+     * Return the number of milliseconds that elapsed while re-authenticating this
+     * session from the perspective of this instance, if applicable, otherwise null.
+     * The server-side perspective will yield a lower value than the client-side
+     * perspective of the same re-authentication because the client-side observes an
+     * additional network round-trip.
      * 
-     * @return the number of milliseconds spent re-authenticating this client-side
-     *         session, if applicable, otherwise null
+     * @return the number of milliseconds that elapsed while re-authenticating this
+     *         session from the perspective of this instance, if applicable,
+     *         otherwise null
      */
     public Long reauthenticationLatencyMs() {
         return authenticator.reauthenticationElapsedTimeMs();
@@ -521,13 +525,13 @@ public class KafkaChannel {
      * session expiration time, if any, otherwise false
      * 
      * @param nanos
-     *            the current time in nanoseconds as per {@link System#nanoTime()}
+     *            the current time in nanoseconds as per {@code System.nanoTime()}
      * @return true if this is a server-side channel and the given time is past the
      *         session expiration time, if any, otherwise false
      */
     public boolean serverAuthenticationSessionExpired(long nanos) {
-        return serverAuthenticationSessionExpirationTimeNanos != null
-                && nanos > serverAuthenticationSessionExpirationTimeNanos.longValue();
+        return serverSessionExpirationTimeNanos != null
+                && nanos > serverSessionExpirationTimeNanos.longValue();
     }
     
     /**
@@ -547,11 +551,11 @@ public class KafkaChannel {
     }
     
     /**
-     * Return true if this is a server-side channel and the connected client
-     * supports re-authentication, otherwise false
+     * Return true if this is a server-side channel and the connected client has
+     * indicated that it supports re-authentication, otherwise false
      * 
-     * @return true if this is a server-side channel and the connected client
-     *         supports re-authentication, otherwise false
+     * @return true if this is a server-side channel and the connected client has
+     *         indicated that it supports re-authentication, otherwise false
      */
     boolean connectedClientSupportsReauthentication() {
         return authenticator.connectedClientSupportsReauthentication();
@@ -561,7 +565,7 @@ public class KafkaChannel {
             throws IOException {
         // close the existing authenticator before replacing it with a new one
         authenticator.close();
-        // now replace with a new one and perform the re-authentication
+        // now replace with a new one and begin the process of re-authenticating
         authenticator = authenticatorCreator.get();
         authenticator.reauthenticate(reauthenticationContext);
     }

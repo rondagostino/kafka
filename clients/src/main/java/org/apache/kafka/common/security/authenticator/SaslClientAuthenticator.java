@@ -306,13 +306,17 @@ public class SaslClientAuthenticator implements Authenticator {
             this.saslState = saslState;
             LOG.debug("Set SASL client state to {}", saslState);
             if (saslState == SaslState.COMPLETE) {
-                completeAuthentication();
+                setAuthenticationEndAndSessionReauthenticationTimes();
+                /*
+                 * Re-authentication is triggered by a write, so we have to make sure that
+                 * pending write is actually sent.
+                 */
                 transportLayer.addInterestOps(SelectionKey.OP_WRITE);
             }
         }
     }
 
-    private void completeAuthentication() {
+    private void setAuthenticationEndAndSessionReauthenticationTimes() {
         authenticationEndMs = time.milliseconds();
         if (positiveSessionLifetimeMs != null) {
             // pick a random percentage between 85% and 95% for session re-authentication

@@ -16,6 +16,8 @@
  */
 package org.apache.kafka.common.network;
 
+import java.util.Objects;
+
 /**
  * Defines the context in which an {@link Authenticator} is to be created during
  * a re-authentication.
@@ -37,7 +39,7 @@ public class ReauthenticationContext {
      *            the current time in milliseconds since the epoch
      */
     public ReauthenticationContext(NetworkReceive saslHandshakeReceive, long now) {
-        this(saslHandshakeReceive, null, null, now);
+        this(Objects.requireNonNull(saslHandshakeReceive), null, null, now);
     }
 
     /**
@@ -52,7 +54,7 @@ public class ReauthenticationContext {
      *            the current time in milliseconds since the epoch
      */
     public ReauthenticationContext(Authenticator previousAuthenticator, NetworkReceive inProgressResponse, long now) {
-        this(null, previousAuthenticator, inProgressResponse, now);
+        this(null, Objects.requireNonNull(previousAuthenticator), inProgressResponse, now);
     }
 
     /**
@@ -90,13 +92,16 @@ public class ReauthenticationContext {
     }
 
     /**
-     * Return the time when re-authentication started, in milliseconds since the epoch
-     * @return the time when re-authentication started, in milliseconds since the epoch
+     * Return the time when re-authentication started, in milliseconds since the
+     * epoch
+     * 
+     * @return the time when re-authentication started, in milliseconds since the
+     *         epoch
      */
     public long reauthenticationStartMs() {
         return reauthenticationStartMs;
     }
-    
+
     private ReauthenticationContext(NetworkReceive saslHandshakeReceive, Authenticator previousAuthenticator,
             NetworkReceive inProgressResponse, long now) {
         this.saslHandshakeReceive = saslHandshakeReceive;

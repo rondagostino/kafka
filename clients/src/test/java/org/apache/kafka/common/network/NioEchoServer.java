@@ -142,7 +142,8 @@ public class NioEchoServer extends Thread {
     public void verifyReauthenticationMetricsIncludingLatency(int successfulReuthentications, final int failedReuthentications)
             throws InterruptedException {
         verifyReauthenticationMetrics(successfulReuthentications, failedReuthentications);
-        waitForMetric("reauthentication-latency", successfulReuthentications, false, false, true, true, metricForensics());
+        // non-zero re-authentications implies some latency recorded
+        waitForMetric("reauthentication-latency", Math.signum(successfulReuthentications), false, false, true, true, metricForensics());
     }
 
     public void verifyAuthenticationNoReauthMetric(int successfulAuthenticationNoReauths)

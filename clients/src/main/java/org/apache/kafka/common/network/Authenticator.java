@@ -66,6 +66,11 @@ public interface Authenticator extends Closeable {
      * written requests; any request queued for writing (for which zero bytes have
      * been written) remains queued until after re-authentication succeeds.
      * 
+     * @param reauthenticationContext
+     *            the context in which this re-authentication is occurring. This
+     *            instance is responsible for closing the previous Authenticator
+     *            returned by
+     *            {@link ReauthenticationContext#previousAuthenticator()}.
      * @throws AuthenticationException
      *             if authentication fails due to invalid credentials or other
      *             security configuration errors

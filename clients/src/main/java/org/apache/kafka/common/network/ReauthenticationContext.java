@@ -23,74 +23,56 @@ import java.util.Objects;
  * a re-authentication.
  */
 public class ReauthenticationContext {
-    private final NetworkReceive saslHandshakeReceive;
+    private final NetworkReceive networkReceive;
     private final Authenticator previousAuthenticator;
-    private final NetworkReceive inProgressResponse;
     private final long reauthenticationBeginMs;
 
     /**
-     * Constructor to be used on the server-side
-     * 
-     * @param saslHandshakeReceive
-     *            the mandatory {@link NetworkReceive} containing the
-     *            {@code SaslHandshakeRequest} that has been received on the server
-     *            and that initiates re-authentication.
-     * @param now
-     *            the current time in milliseconds since the epoch. This defines the
-     *            moment when re-authentication begins.
-     */
-    public ReauthenticationContext(NetworkReceive saslHandshakeReceive, long now) {
-        this(Objects.requireNonNull(saslHandshakeReceive), null, null, now);
-    }
-
-    /**
-     * Constructor to be used on the client-side
+     * Constructor
      * 
      * @param previousAuthenticator
      *            the mandatory {@link Authenticator} that was previously used to
      *            authenticate the channel
-     * @param inProgressResponse
-     *            a response that has been partially read, if any, otherwise null
+     * @param networkReceive
+     *            the applicable {@link NetworkReceive} instance, if any. For the
+     *            client side this is a response that has been partially read, if
+     *            any, otherwise null. For the server side this is mandatory and it
+     *            must contain the {@code SaslHandshakeRequest} that has been
+     *            received on the server and that initiates re-authentication.
+     * 
      * @param now
      *            the current time in milliseconds since the epoch. This defines the
      *            moment when re-authentication begins.
      */
-    public ReauthenticationContext(Authenticator previousAuthenticator, NetworkReceive inProgressResponse, long now) {
-        this(null, Objects.requireNonNull(previousAuthenticator), inProgressResponse, now);
+    public ReauthenticationContext(Authenticator previousAuthenticator, NetworkReceive networkReceive, long now) {
+        this.previousAuthenticator = Objects.requireNonNull(previousAuthenticator);
+        this.networkReceive = networkReceive;
+        this.reauthenticationBeginMs = now;
     }
 
     /**
-     * Return the {@link NetworkReceive} containing the {@code SaslHandshakeRequest}
-     * that initiates re-authentication on the server, otherwise null if this is a
-     * client-side context
+     * Return the applicable {@link NetworkReceive} instance, if any. For the client
+     * side this is a response that has been partially read, if any, otherwise null.
+     * For the server side this is mandatory and it must contain the
+     * {@code SaslHandshakeRequest} that has been received on the server and that
+     * initiates re-authentication.
      * 
-     * @return the {@link NetworkReceive} containing the
-     *         {@code SaslHandshakeRequest} that initiates re-authentication on the
-     *         server, otherwise null if this is a client-side context
+     * 
+     * @return the applicable {@link NetworkReceive} instance, if any
      */
-    public NetworkReceive saslHandshakeReceive() {
-        return saslHandshakeReceive;
+    public NetworkReceive networkReceive() {
+        return networkReceive;
     }
 
     /**
-     * Return the {@link Authenticator} that was previously used to authenticate the
-     * channel on the client, otherwise null if this is a server-side context
+     * Return the always non-null {@link Authenticator} that was previously used to
+     * authenticate the channel
      * 
-     * @return the {@link Authenticator} that was previously used to authenticate
-     *         the channel on the client, otherwise null if this is a server-side
-     *         context
+     * @return the always non-null {@link Authenticator} that was previously used to
+     *         authenticate the channel
      */
     public Authenticator previousAuthenticator() {
         return previousAuthenticator;
-    }
-
-    /**
-     * Return the response that has been partially read, if any, otherwise null
-     * 
-     * @return the response that has been partially read, if any, otherwise null
-     */
-    public NetworkReceive inProgressResponse() {
-        return inProgressResponse;
     }
 
     /**
@@ -101,13 +83,5 @@ public class ReauthenticationContext {
      */
     public long reauthenticationBeginMs() {
         return reauthenticationBeginMs;
-    }
-
-    private ReauthenticationContext(NetworkReceive saslHandshakeReceive, Authenticator previousAuthenticator,
-            NetworkReceive inProgressResponse, long now) {
-        this.saslHandshakeReceive = saslHandshakeReceive;
-        this.previousAuthenticator = previousAuthenticator;
-        this.inProgressResponse = inProgressResponse;
-        this.reauthenticationBeginMs = now;
     }
 }

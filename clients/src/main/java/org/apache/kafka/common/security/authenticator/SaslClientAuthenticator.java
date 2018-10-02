@@ -259,7 +259,8 @@ public class SaslClientAuthenticator implements Authenticator {
             throw new IllegalArgumentException(
                     "Invalid previous authenticator in client-side re-authentication context: " + previousAuthenticator);
         apiVersionsResponse = ((SaslClientAuthenticator) previousAuthenticator).apiVersionsResponse;
-        netInBuffer = reauthenticationContext.inProgressResponse();
+        previousAuthenticator.close();
+        netInBuffer = reauthenticationContext.networkReceive();
         reauthenticating = true;
         reauthenticationBeginMs = reauthenticationContext.reauthenticationBeginMs();
         authenticate();

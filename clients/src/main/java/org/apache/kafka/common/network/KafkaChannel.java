@@ -473,7 +473,8 @@ public class KafkaChannel {
             throws AuthenticationException, IOException {
         if (serverSessionExpirationTimeNanos == null || !ready())
             return false;
-        swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(saslHandshakeNetworkReceive, now));
+        swapAuthenticatorsAndBeginReauthentication(
+                new ReauthenticationContext(authenticator, saslHandshakeNetworkReceive, now));
         return true;
     }
 
@@ -563,9 +564,8 @@ public class KafkaChannel {
 
     private void swapAuthenticatorsAndBeginReauthentication(ReauthenticationContext reauthenticationContext)
             throws IOException {
-        // close the existing authenticator before replacing it with a new one
-        authenticator.close();
-        // now replace with a new one and begin the process of re-authenticating
+        // it is up to the new authenticator to close the old one
+        // replace with a new one and begin the process of re-authenticating
         authenticator = authenticatorCreator.get();
         authenticator.reauthenticate(reauthenticationContext);
     }

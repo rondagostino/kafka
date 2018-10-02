@@ -20,9 +20,11 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
+import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -30,6 +32,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Base64.Encoder;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.security.auth.Subject;
@@ -81,6 +84,12 @@ import org.apache.kafka.common.security.JaasContext;
 import org.apache.kafka.common.security.TestSecurityConfig;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
+import org.apache.kafka.common.security.oauthbearer.OAuthBearerToken;
+import org.apache.kafka.common.security.oauthbearer.OAuthBearerTokenCallback;
+import org.apache.kafka.common.security.oauthbearer.internals.unsecured.OAuthBearerConfigException;
+import org.apache.kafka.common.security.oauthbearer.internals.unsecured.OAuthBearerIllegalTokenException;
+import org.apache.kafka.common.security.oauthbearer.internals.unsecured.OAuthBearerUnsecuredJws;
+import org.apache.kafka.common.security.oauthbearer.internals.unsecured.OAuthBearerUnsecuredLoginCallbackHandler;
 import org.apache.kafka.common.security.plain.PlainLoginModule;
 import org.apache.kafka.common.security.scram.ScramCredential;
 import org.apache.kafka.common.security.scram.internals.ScramCredentialUtils;
@@ -1321,6 +1330,171 @@ public class SaslAuthenticatorTest {
         createAndCheckClientConnection(securityProtocol, node);
     }
 
+    /*
+     * Create an alternate login callback handler that continually returns a
+     * different principal
+     */
+    public static class AlternateLoginCallbackHandler implements AuthenticateCallbackHandler {
+        private static final OAuthBearerUnsecuredLoginCallbackHandler DELEGATE = new OAuthBearerUnsecuredLoginCallbackHandler();
+        private static final String QUOTE = "\"";
+        private static int numInvocations = 0;
+
+        @Override
+        public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
+            DELEGATE.handle(callbacks);
+            // now change any returned token to have a different principal name
+            if (callbacks.length > 0)
+                for (Callback callback : callbacks) {
+                    if (callback instanceof OAuthBearerTokenCallback) {
+                        OAuthBearerTokenCallback oauthBearerTokenCallback = (OAuthBearerTokenCallback) callback;
+                        OAuthBearerToken token = oauthBearerTokenCallback.token();
+                        if (token != null) {
+                            String pchangedPrincipalNameToUse = token.principalName()
+                                    + String.valueOf(++numInvocations);
+                            String headerJson = "{" + claimOrHeaderJsonText("alg", "none") + "}";
+                            /*
+                             * Use a short lifetime so the background refresh thread replaces it before we
+                             * re-authenticate
+                             */
+                            String lifetimeSecondsValueToUse = "1";
+                            String claimsJson;
+                            try {
+                                claimsJson = String.format("{%s,%s,%s}",
+                                        expClaimText(Long.parseLong(lifetimeSecondsValueToUse)),
+                                        claimOrHeaderJsonText("iat", time.milliseconds() / 1000.0),
+                                        claimOrHeaderJsonText("sub", pchangedPrincipalNameToUse));
+                            } catch (NumberFormatException e) {
+                                throw new OAuthBearerConfigException(e.getMessage());
+                            }
+                            try {
+                                Encoder urlEncoderNoPadding = Base64.getUrlEncoder().withoutPadding();
+                                OAuthBearerUnsecuredJws jws = new OAuthBearerUnsecuredJws(String.format("%s.%s.",
+                                        urlEncoderNoPadding.encodeToString(headerJson.getBytes(StandardCharsets.UTF_8)),
+                                        urlEncoderNoPadding
+                                                .encodeToString(claimsJson.getBytes(StandardCharsets.UTF_8))),
+                                        "sub", "scope");
+                                oauthBearerTokenCallback.token(jws);
+                            } catch (OAuthBearerIllegalTokenException e) {
+                                // occurs if the principal claim doesn't exist or has an empty value
+                                throw new OAuthBearerConfigException(e.getMessage(), e);
+                            }
+                        }
+                    }
+                }
+
+        }
+
+        private static String claimOrHeaderJsonText(String claimName, String claimValue) {
+            return QUOTE + claimName + QUOTE + ":" + QUOTE + claimValue + QUOTE;
+        }
+
+        private static String claimOrHeaderJsonText(String claimName, Number claimValue) {
+            return QUOTE + claimName + QUOTE + ":" + claimValue;
+        }
+
+        private static String expClaimText(long lifetimeSeconds) {
+            return claimOrHeaderJsonText("exp", time.milliseconds() / 1000.0 + lifetimeSeconds);
+        }
+
+        @Override
+        public void configure(Map<String, ?> configs, String saslMechanism,
+                List<AppConfigurationEntry> jaasConfigEntries) {
+            DELEGATE.configure(configs, saslMechanism, jaasConfigEntries);
+        }
+
+        @Override
+        public void close() {
+            DELEGATE.close();
+        }
+    }
+    
+    /**
+     * Re-authentication must fail if principal changes
+     */
+    @Test
+    public void testCannotReauthenticateWithDifferentPrincipal() throws Exception {
+        String node = "0";
+        SecurityProtocol securityProtocol = SecurityProtocol.SASL_SSL;
+        saslClientConfigs.put(SaslConfigs.SASL_LOGIN_CALLBACK_HANDLER_CLASS,
+                AlternateLoginCallbackHandler.class.getName());
+        configureMechanisms(OAuthBearerLoginModule.OAUTHBEARER_MECHANISM,
+                Arrays.asList(OAuthBearerLoginModule.OAUTHBEARER_MECHANISM));
+        server = createEchoServer(securityProtocol);
+        try {
+            createAndCheckClientConnection(securityProtocol, node);
+        } catch (AssertionError e) {
+            // we expect the failure only during re-authentication
+            if (!waitAndReauthenticate)
+                throw e;
+        }
+    }
+
+    /*
+     * Define a channel builder that starts with the DIGEST-MD5 mechanism and then
+     * switches to the PLAIN mechanism
+     */
+    private static class AlternateSaslChannelBuilder extends SaslChannelBuilder {
+        private int numInvocations = 0;
+
+        public AlternateSaslChannelBuilder(SaslChannelBuilder from, Map<String, ?> configs) {
+            super(from);
+            configure(configs);
+        }
+
+        @Override
+        protected SaslClientAuthenticator buildClientAuthenticator(Map<String, ?> configs,
+                AuthenticateCallbackHandler callbackHandler, String id, String serverHost, String servicePrincipal,
+                TransportLayer transportLayer, Subject subject) {
+            if (++numInvocations == 1)
+                return new SaslClientAuthenticator(configs, callbackHandler, id, subject, servicePrincipal, serverHost,
+                        "DIGEST-MD5", true, transportLayer, time);
+            else
+                return new SaslClientAuthenticator(configs, callbackHandler, id, subject, servicePrincipal, serverHost,
+                        "PLAIN", true, transportLayer, time) {
+                    @Override
+                    protected SaslHandshakeRequest createSaslHandshakeRequest(short version) {
+                        return new SaslHandshakeRequest.Builder("PLAIN").build(version);
+                    }
+                };
+        }
+    }
+    
+    /**
+     * Re-authentication must fail if mechanism changes
+     */
+    @Test
+    public void testCannotReauthenticateWithDifferentMechanism() throws Exception {
+        String node = "0";
+        SecurityProtocol securityProtocol = SecurityProtocol.SASL_SSL;
+        configureMechanisms("DIGEST-MD5", Arrays.asList("DIGEST-MD5", "PLAIN"));
+        configureDigestMd5ServerCallback(securityProtocol);
+        server = createEchoServer(securityProtocol);
+
+        String saslMechanism = (String) saslClientConfigs.get(SaslConfigs.SASL_MECHANISM);
+        SaslChannelBuilder standardChannelBuilder = (SaslChannelBuilder) ChannelBuilders.clientChannelBuilder(
+                securityProtocol, JaasContext.Type.CLIENT, new TestSecurityConfig(saslClientConfigs), null,
+                saslMechanism, true);
+        this.channelBuilder = new AlternateSaslChannelBuilder(standardChannelBuilder,
+                new TestSecurityConfig(saslClientConfigs).values());
+        this.selector = NetworkTestUtils.createSelector(channelBuilder, time);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
+        selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
+        boolean success = false;
+        try {
+            checkClientConnection(node, 1);
+            success = true;
+        } catch (AssertionError e) {
+            // we only expect an exception when re-authenticating
+            boolean expectException = waitAndReauthenticate;
+            if (!expectException)
+                throw e;
+        }
+        // we only expect success when not re-authenticating
+        boolean expectSuccess = !waitAndReauthenticate;
+        if (success && !expectSuccess)
+            fail("Reauthentication with a different mechanism succeeded; it should not have");
+    }
+
     /**
      * Tests OAUTHBEARER fails the connection when the client presents a token with
      * insufficient scope .
@@ -1600,6 +1774,10 @@ public class SaslAuthenticatorTest {
 
     private void createAndCheckClientConnection(SecurityProtocol securityProtocol, String node, int reauthSleepFactor) throws Exception {
         createClientConnection(securityProtocol, node);
+        checkClientConnection(node, reauthSleepFactor);
+    }
+    
+    private void checkClientConnection(String node, int reauthSleepFactor) throws Exception {
         NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         if (waitAndReauthenticate) {
             final long startTime = System.currentTimeMillis();

@@ -115,6 +115,13 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
         this.time = time;
     }
 
+    // visible for testing
+    protected SaslChannelBuilder(SaslChannelBuilder from) {
+        this(from.mode, from.jaasContexts, from.securityProtocol, from.listenerName, from.isInterBrokerListener,
+                from.clientSaslMechanism, from.handshakeRequestEnable, from.credentialCache, from.tokenCache,
+                from.time);
+    }
+    
     @SuppressWarnings("unchecked")
     @Override
     public void configure(Map<String, ?> configs) throws KafkaException {
@@ -223,7 +230,8 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
             handler.close();
     }
 
-    private TransportLayer buildTransportLayer(String id, SelectionKey key, SocketChannel socketChannel) throws IOException {
+    // Visible to override for testing
+    protected TransportLayer buildTransportLayer(String id, SelectionKey key, SocketChannel socketChannel) throws IOException {
         if (this.securityProtocol == SecurityProtocol.SASL_SSL) {
             return SslTransportLayer.create(id, key,
                 sslFactory.createSslEngine(socketChannel.socket().getInetAddress().getHostName(), socketChannel.socket().getPort()));

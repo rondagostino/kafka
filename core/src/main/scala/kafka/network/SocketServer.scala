@@ -551,9 +551,9 @@ private[kafka] class Processor(val id: Int,
     Map(NetworkProcessorMetricTag -> id.toString)
   )
   
-//  val expiredConnectionsKilledCount = new Total()
-//  private val expiredConnectionsKilledCountMetricName = metrics.metricName("ExpiredConnectionsKilledCount", "socket-server-metrics", metricTags)
-//  metrics.addMetric(expiredConnectionsKilledCountMetricName, expiredConnectionsKilledCount)
+  val expiredConnectionsKilledCount = new Total()
+  private val expiredConnectionsKilledCountMetricName = metrics.metricName("ExpiredConnectionsKilledCount", "socket-server-metrics", metricTags)
+  metrics.addMetric(expiredConnectionsKilledCountMetricName, expiredConnectionsKilledCount)
 
   private val selector = createSelector(
     ChannelBuilders.serverChannelBuilder(listenerName,
@@ -713,7 +713,7 @@ private[kafka] class Processor(val id: Int,
               if (channel.serverAuthenticationSessionExpired(time.nanoseconds)) {
                 channel.disconnect()
                 debug(s"Disconnected expired channel: $channel : $header")
-                //expiredConnectionsKilledCount.record(null, 1, 0)
+                expiredConnectionsKilledCount.record(null, 1, 0)
               } else {
                 val connectionId = receive.source
                 val context = new RequestContext(header, connectionId, channel.socketAddress,
@@ -899,7 +899,7 @@ private[kafka] class Processor(val id: Int,
   override def shutdown(): Unit = {
     super.shutdown()
     removeMetric("IdlePercent", Map("networkProcessor" -> id.toString))
-    //metrics.removeMetric(expiredConnectionsKilledCountMetricName)
+    metrics.removeMetric(expiredConnectionsKilledCountMetricName)
   }
 
 }

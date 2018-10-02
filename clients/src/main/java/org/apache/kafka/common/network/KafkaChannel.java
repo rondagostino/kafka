@@ -30,8 +30,10 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * A Kafka connection from a client (which could be a broker in an inter-broker
- * scenario) to a broker.
+ * A Kafka connection either existing on a client (which could be a broker in an
+ * inter-broker scenario) and representing the channel to a remote broker or the
+ * reverse (existing on a broker and representing the channel to a remote
+ * client, which could be a broker in an inter-broker scenario).
  * <p>
  * Each instance has the following:
  * <ul>
@@ -55,6 +57,8 @@ import java.util.function.Supplier;
  * </ul>
  */
 public class KafkaChannel {
+    private static final long ONE_SECOND_NANOS = 1000 * 1000 * 1000;
+
     /**
      * Mute States for KafkaChannel:
      * <ul>
@@ -103,8 +107,8 @@ public class KafkaChannel {
 
     private final String id;
     private final TransportLayer transportLayer;
-    private Authenticator authenticator;
     private final Supplier<Authenticator> authenticatorCreator;
+    private Authenticator authenticator;
     // Tracks accumulated network thread time. This is updated on the network thread.
     // The values are read and reset after each response is sent.
     private long networkThreadTimeNanos;
@@ -119,9 +123,10 @@ public class KafkaChannel {
     private ChannelState state;
     private int successfulAuthentications = 0;
     // At least one -- and possibly both -- of these next two values will be null
-    private Long clientSessionReauthenticationTimeMs = null;
+    private Long clientSessionReauthenticationTimeNanos = null;
     private Long serverSessionExpirationTimeNanos = null;
     private boolean midWrite = false;
+    private long lastReauthenticationStartNanos = 0L;
 
     public KafkaChannel(String id, TransportLayer transportLayer, Supplier<Authenticator> authenticatorCreator, int maxReceiveSize, MemoryPool memoryPool) {
         this.id = id;
@@ -175,7 +180,7 @@ public class KafkaChannel {
         if (ready()) {
             ++successfulAuthentications;
             // At least one -- and possibly both -- of these next two values will be null
-            clientSessionReauthenticationTimeMs = authenticator.clientSessionReauthenticationTimeMs();
+            clientSessionReauthenticationTimeNanos = authenticator.clientSessionReauthenticationTimeNanos();
             serverSessionExpirationTimeNanos = authenticator.serverSessionExpirationTimeNanos();
             state = ChannelState.READY;
         }
@@ -458,8 +463,11 @@ public class KafkaChannel {
      *            the mandatory {@link NetworkReceive} containing the
      *            {@code SaslHandshakeRequest} that has been received on the server
      *            and that initiates re-authentication.
-     * @param now
-     *            the current time in milliseconds since the epoch
+     * @param nowNanos
+     *            the current time. The value is in nanoseconds as per
+     *            {@code System.nanoTime()} and is therefore only useful when
+     *            compared to such a value -- it's absolute value is meaningless.
+     * 
      * @return true if this is a server-side connection that is ready for use (i.e.
      *         authenticated and operational) to indicate that the re-authentication
      *         process has begun, otherwise false
@@ -469,12 +477,19 @@ public class KafkaChannel {
      * @throws IOException
      *             if read/write fails due to an I/O error
      */
-    public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive, long now)
+    public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive, long nowNanos)
             throws AuthenticationException, IOException {
-        if (serverSessionExpirationTimeNanos == null || !ready())
+        /*
+         * Cannot re-authenticate more than once every second; an attempt to do so
+         * will result in the SASL handshake network receive being processed normally,
+         * which results in the connection being closed.
+         */
+        if (serverSessionExpirationTimeNanos == null || !ready()
+                || (lastReauthenticationStartNanos > 0 && nowNanos - lastReauthenticationStartNanos < ONE_SECOND_NANOS))
             return false;
+        lastReauthenticationStartNanos = nowNanos;
         swapAuthenticatorsAndBeginReauthentication(
-                new ReauthenticationContext(authenticator, saslHandshakeNetworkReceive, now));
+                new ReauthenticationContext(authenticator, saslHandshakeNetworkReceive, nowNanos));
         return true;
     }
 
@@ -484,8 +499,11 @@ public class KafkaChannel {
      * past and no writes are in progress then begin the process of
      * re-authenticating the connection and return true, otherwise return false
      * 
-     * @param now
-     *            the current time in milliseconds since the epoch
+     * @param nowNanos
+     *            the current time. The value is in nanoseconds as per
+     *            {@code System.nanoTime()} and is therefore only useful when
+     *            compared to such a value -- it's absolute value is meaningless.
+     * 
      * @return true if this is a client-side connection that is ready for use (i.e.
      *         authenticated and operational) and there is both a session expiration
      *         time defined that has past and no writes are in progress to indicate
@@ -496,12 +514,12 @@ public class KafkaChannel {
      * @throws IOException
      *             if read/write fails due to an I/O error
      */
-    public boolean maybeBeginClientReauthentication(long now) throws AuthenticationException, IOException {
-        if (clientSessionReauthenticationTimeMs == null || !ready())
+    public boolean maybeBeginClientReauthentication(long nowNanos) throws AuthenticationException, IOException {
+        if (clientSessionReauthenticationTimeNanos == null || !ready())
             return false;
-        if (midWrite || now < clientSessionReauthenticationTimeMs.longValue())
+        if (midWrite || nowNanos < clientSessionReauthenticationTimeNanos.longValue())
             return false;
-        swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(authenticator, receive, now));
+        swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(authenticator, receive, nowNanos));
         receive = null;
         return true;
     }
@@ -525,14 +543,14 @@ public class KafkaChannel {
      * Return true if this is a server-side channel and the given time is past the
      * session expiration time, if any, otherwise false
      * 
-     * @param nanos
+     * @param nowNanos
      *            the current time in nanoseconds as per {@code System.nanoTime()}
      * @return true if this is a server-side channel and the given time is past the
      *         session expiration time, if any, otherwise false
      */
-    public boolean serverAuthenticationSessionExpired(long nanos) {
+    public boolean serverAuthenticationSessionExpired(long nowNanos) {
         return serverSessionExpirationTimeNanos != null
-                && nanos > serverSessionExpirationTimeNanos.longValue();
+                && nowNanos - serverSessionExpirationTimeNanos.longValue() > 0;
     }
     
     /**

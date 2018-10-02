@@ -46,7 +46,6 @@ import org.apache.kafka.common.requests.SaslAuthenticateRequest;
 import org.apache.kafka.common.requests.SaslAuthenticateResponse;
 import org.apache.kafka.common.requests.SaslHandshakeRequest;
 import org.apache.kafka.common.requests.SaslHandshakeResponse;
-import org.apache.kafka.common.security.JaasUtils;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.common.security.auth.KafkaPrincipalBuilder;
@@ -112,7 +111,7 @@ public class SaslServerAuthenticator implements Authenticator {
     private final Map<String, AuthenticateCallbackHandler> callbackHandlers;
     private final Map<String, Long> connectionsMaxReauthMsByMechanism;
     private Long sessionExpirationTimeNanos;
-    private boolean connectedClientSupportsReauthentication = false;
+    private boolean connectedClientSupportsReauthentication;
 
     // Current SASL state
     private SaslState saslState = SaslState.INITIAL_REQUEST;
@@ -125,15 +124,14 @@ public class SaslServerAuthenticator implements Authenticator {
 
     // buffers used in `authenticate`
     private NetworkReceive netInBuffer;
-    private NetworkReceive saslHandshakeReauthenticationReceive;
     private Send netOutBuffer;
     private Send authenticationFailureSend = null;
     // flag indicating if sasl tokens are sent as Kafka SaslAuthenticate request/responses
     private boolean enableKafkaSaslAuthenticateHeaders;
-    private boolean reauthenticating = false;
+    private boolean reauthenticating;
     private final Time time;
-    private long reauthenticationBeginMs;
-    private long authenticationEndMs;
+    private long reauthenticationBeginNanos;
+    private long authenticationEndNanos;
     private String previousSaslMechanism = null;
     private KafkaPrincipal previousKafkaPrincipal = null;
 
@@ -175,6 +173,8 @@ public class SaslServerAuthenticator implements Authenticator {
         // Note that the old principal builder does not support SASL, so we do not need to pass the
         // authenticator or the transport layer
         this.principalBuilder = ChannelBuilders.createPrincipalBuilder(configs, null, null, kerberosNameParser);
+        connectedClientSupportsReauthentication = false;
+        reauthenticating = false;
     }
 
     private void createSaslServer(String mechanism) throws IOException {
@@ -253,16 +253,12 @@ public class SaslServerAuthenticator implements Authenticator {
             return;
         }
 
-        boolean saslHandshakeReauthenticationInput = saslHandshakeReauthenticationReceive != null
-                && netInBuffer == saslHandshakeReauthenticationReceive;
-        if (!saslHandshakeReauthenticationInput) {
-            if (netInBuffer == null)
-                // allocate on heap (as opposed to any socket server memory pool)
-                netInBuffer = new NetworkReceive(MAX_RECEIVE_SIZE, connectionId);
-            netInBuffer.readFrom(transportLayer);
-            if (!netInBuffer.complete())
-                return;
-        }
+        if (netInBuffer == null)
+            // allocate on heap (as opposed to any socket server memory pool)
+            netInBuffer = new NetworkReceive(MAX_RECEIVE_SIZE, connectionId);
+        netInBuffer.readFrom(transportLayer);
+        if (!netInBuffer.complete())
+            return;
         netInBuffer.payload().rewind();
         processPayload();
     }
@@ -271,7 +267,6 @@ public class SaslServerAuthenticator implements Authenticator {
         byte[] clientToken = new byte[netInBuffer.payload().remaining()];
         netInBuffer.payload().get(clientToken, 0, clientToken.length);
         netInBuffer = null; // reset the networkReceive as we read all the data.
-        saslHandshakeReauthenticationReceive = null;
         try {
             switch (saslState) {
                 case HANDSHAKE_OR_VERSIONS_REQUEST:
@@ -348,11 +343,11 @@ public class SaslServerAuthenticator implements Authenticator {
         previousKafkaPrincipal = previousSaslServerAuthenticator.principal();
         previousSaslServerAuthenticator.close();
         netInBuffer = saslHandshakeReceive;
-        saslHandshakeReauthenticationReceive = saslHandshakeReceive;
         reauthenticating = true;
-        reauthenticationBeginMs = reauthenticationContext.reauthenticationBeginMs();
+        reauthenticationBeginNanos = reauthenticationContext.reauthenticationBeginNanos();
         LOG.debug("Beginning re-authentication: {}", this);
-        authenticate();
+        netInBuffer.payload().rewind();
+        processPayload();
     }
 
     @Override
@@ -362,7 +357,7 @@ public class SaslServerAuthenticator implements Authenticator {
 
     @Override
     public Long reauthenticationElapsedTimeMs() {
-        return reauthenticating ? Long.valueOf(authenticationEndMs - reauthenticationBeginMs) : null;
+        return reauthenticating ? Long.valueOf((authenticationEndNanos - reauthenticationBeginNanos) / 1000 / 1000) : null;
     }
 
     @Override
@@ -456,7 +451,7 @@ public class SaslServerAuthenticator implements Authenticator {
                 byte[] responseToken = evaluateResponse(responseFromClient);
                 // For versions with SASL_AUTHENTICATE header, send a response to SASL_AUTHENTICATE request even if token is empty.
                 ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
-                long sessionLifetimeMs = calcSessionLifetimeAndMaybeAuthenticationEndAndSessionExpirationTimes();
+                long sessionLifetimeMs = !saslServer.isComplete() ? 0L : calcCompletionTimes();
                 sendKafkaResponse(requestContext, new SaslAuthenticateResponse(Errors.NONE, null, responseBuf, sessionLifetimeMs));
             } catch (SaslAuthenticationException e) {
                 buildResponseOnAuthenticateFailure(requestContext,
@@ -491,39 +486,36 @@ public class SaslServerAuthenticator implements Authenticator {
         return retval;
     }
 
-    private long calcSessionLifetimeAndMaybeAuthenticationEndAndSessionExpirationTimes() {
+    private long calcCompletionTimes() {
         long retvalSessionLifetimeMs = 0L;
-        if (saslServer.isComplete()) {
-            authenticationEndMs = time.milliseconds();
-            long authenticationTimeNanos = time.nanoseconds();
-            Long saslServerConectionLifetimeMs = (Long) saslServer
-                    .getNegotiatedProperty(JaasUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
-            Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
-            if (saslServerConectionLifetimeMs != null || connectionsMaxReauthMs != null) {
-                if (saslServerConectionLifetimeMs == null)
-                    retvalSessionLifetimeMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
-                else if (connectionsMaxReauthMs == null)
-                    retvalSessionLifetimeMs = zeroIfNegative(
-                            saslServerConectionLifetimeMs.longValue() - authenticationEndMs);
-                else
-                    retvalSessionLifetimeMs = zeroIfNegative(
-                            Math.min(saslServerConectionLifetimeMs.longValue() - authenticationEndMs,
-                                    connectionsMaxReauthMs.longValue()));
-                if (retvalSessionLifetimeMs > 0L)
-                    sessionExpirationTimeNanos = Long
-                            .valueOf(authenticationTimeNanos + 1000 * 1000 * retvalSessionLifetimeMs);
-            }
-            LOG.debug(
-                    "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); session expiration = {} ({} ms), sending {} ms to client",
-                    connectionsMaxReauthMs,
-                    saslServerConectionLifetimeMs != null ? new Date(saslServerConectionLifetimeMs) : null,
-                    saslServerConectionLifetimeMs != null
-                            ? Long.valueOf(saslServerConectionLifetimeMs.longValue() - authenticationEndMs)
-                            : null,
-                    sessionExpirationTimeNanos != null ? new Date(authenticationEndMs + retvalSessionLifetimeMs)
-                            : "N/A",
-                    sessionExpirationTimeNanos != null ? retvalSessionLifetimeMs : "N/A", retvalSessionLifetimeMs);
+        long authenticationEndMs = time.milliseconds();
+        authenticationEndNanos = time.nanoseconds();
+        Long saslServerCredentialExpirationMs = (Long) saslServer
+                .getNegotiatedProperty(SaslUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
+        Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
+        if (saslServerCredentialExpirationMs != null || connectionsMaxReauthMs != null) {
+            if (saslServerCredentialExpirationMs == null)
+                retvalSessionLifetimeMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
+            else if (connectionsMaxReauthMs == null)
+                retvalSessionLifetimeMs = zeroIfNegative(
+                        saslServerCredentialExpirationMs.longValue() - authenticationEndMs);
+            else
+                retvalSessionLifetimeMs = zeroIfNegative(
+                        Math.min(saslServerCredentialExpirationMs.longValue() - authenticationEndMs,
+                                connectionsMaxReauthMs.longValue()));
+            if (retvalSessionLifetimeMs > 0L)
+                sessionExpirationTimeNanos = Long
+                        .valueOf(authenticationEndNanos + 1000 * 1000 * retvalSessionLifetimeMs);
         }
+        LOG.debug(
+                "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); session expiration = {} ({} ms), sending {} ms to client",
+                connectionsMaxReauthMs,
+                saslServerCredentialExpirationMs != null ? new Date(saslServerCredentialExpirationMs) : null,
+                saslServerCredentialExpirationMs != null
+                        ? Long.valueOf(saslServerCredentialExpirationMs.longValue() - authenticationEndMs)
+                        : null,
+                sessionExpirationTimeNanos != null ? new Date(authenticationEndMs + retvalSessionLifetimeMs) : "N/A",
+                sessionExpirationTimeNanos != null ? retvalSessionLifetimeMs : "N/A", retvalSessionLifetimeMs);
         return retvalSessionLifetimeMs;
     }
 

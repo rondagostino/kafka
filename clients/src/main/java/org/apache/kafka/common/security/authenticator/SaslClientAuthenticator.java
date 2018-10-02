@@ -74,6 +74,7 @@ public class SaslClientAuthenticator implements Authenticator {
     public enum SaslState {
         SEND_APIVERSIONS_REQUEST,            // Initial state: client sends ApiVersionsRequest in this state when authenticating
         RECEIVE_APIVERSIONS_RESPONSE,        // Awaiting ApiVersionsResponse from server
+        PROCESS_APIVERSIONS_RESPONSE,        // process ApiVersionsResponse from server or from previous authentication
         SEND_HANDSHAKE_REQUEST,              // Received ApiVersionsResponse, send SaslHandshake request (re-authentication starts here)
         RECEIVE_HANDSHAKE_OR_OTHER_RESPONSE, // Awaiting SaslHandshake response from server (may receive other, in-flight responses as well when re-authenticating)
         INITIAL,                             // Initial state starting SASL token exchange for configured mechanism, send first token
@@ -119,7 +120,7 @@ public class SaslClientAuthenticator implements Authenticator {
     private long reauthenticationBeginMs;
     private long authenticationEndMs;
     private final Time time;
-    private Long clientSessionReauthenticationTimeMs = null;
+    private Long clientSessionReauthenticationTimeNanos = null;
 
     public SaslClientAuthenticator(Map<String, ?> configs,
                                    AuthenticateCallbackHandler callbackHandler,
@@ -187,28 +188,26 @@ public class SaslClientAuthenticator implements Authenticator {
 
         switch (saslState) {
             case SEND_APIVERSIONS_REQUEST:
-                if (this.apiVersionsResponse == null) {
-                    // Always use version 0 request since brokers treat requests with schema exceptions as GSSAPI tokens
-                    ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest((short) 0);
-                    send(apiVersionsRequest.toSend(node, nextRequestHeader(ApiKeys.API_VERSIONS, apiVersionsRequest.version())));
-                    setSaslState(SaslState.RECEIVE_APIVERSIONS_RESPONSE);
-                    break;
-                } else
-                    setSaslState(SaslState.RECEIVE_APIVERSIONS_RESPONSE); // fall through
+                // Always use version 0 request since brokers treat requests with schema exceptions as GSSAPI tokens
+                ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest((short) 0);
+                send(apiVersionsRequest.toSend(node, nextRequestHeader(ApiKeys.API_VERSIONS, apiVersionsRequest.version())));
+                setSaslState(SaslState.RECEIVE_APIVERSIONS_RESPONSE);
+                break;
             case RECEIVE_APIVERSIONS_RESPONSE:
-                ApiVersionsResponse apiVersionsResponse = this.apiVersionsResponse != null ? this.apiVersionsResponse
-                        : (ApiVersionsResponse) receiveKafkaResponse();
-                if (apiVersionsResponse == null)
+                ApiVersionsResponse apiVersionsResponseFromServer = (ApiVersionsResponse) receiveKafkaResponse();
+                if (apiVersionsResponseFromServer == null)
                     break;
-                else {
-                    saslHandshakeVersion = apiVersionsResponse.apiVersion(ApiKeys.SASL_HANDSHAKE.id).maxVersion;
-                    ApiVersion authenticateVersion = apiVersionsResponse.apiVersion(ApiKeys.SASL_AUTHENTICATE.id);
-                    if (authenticateVersion != null)
-                        saslAuthenticateVersion((short) Math.min(authenticateVersion.maxVersion, ApiKeys.SASL_AUTHENTICATE.latestVersion()));
-                    setSaslState(SaslState.SEND_HANDSHAKE_REQUEST);
-                    this.apiVersionsResponse = apiVersionsResponse;
-                    // Fall through to send handshake request with the latest supported version
-                }
+                apiVersionsResponse = apiVersionsResponseFromServer;
+                setSaslState(SaslState.PROCESS_APIVERSIONS_RESPONSE);
+                // fall through to process the response
+            case PROCESS_APIVERSIONS_RESPONSE:
+                saslHandshakeVersion = apiVersionsResponse.apiVersion(ApiKeys.SASL_HANDSHAKE.id).maxVersion;
+                ApiVersion authenticateVersion = apiVersionsResponse.apiVersion(ApiKeys.SASL_AUTHENTICATE.id);
+                if (authenticateVersion != null)
+                    saslAuthenticateVersion((short) Math.min(authenticateVersion.maxVersion,
+                            ApiKeys.SASL_AUTHENTICATE.latestVersion()));
+                setSaslState(SaslState.SEND_HANDSHAKE_REQUEST);
+                // Fall through to send handshake request with the latest supported version
             case SEND_HANDSHAKE_REQUEST:
                 SaslHandshakeRequest handshakeRequest = createSaslHandshakeRequest(saslHandshakeVersion);
                 send(handshakeRequest.toSend(node, nextRequestHeader(ApiKeys.SASL_HANDSHAKE, handshakeRequest.version())));
@@ -262,7 +261,8 @@ public class SaslClientAuthenticator implements Authenticator {
         previousAuthenticator.close();
         netInBuffer = reauthenticationContext.networkReceive();
         reauthenticating = true;
-        reauthenticationBeginMs = reauthenticationContext.reauthenticationBeginMs();
+        reauthenticationBeginMs = reauthenticationContext.reauthenticationBeginNanos();
+        setSaslState(SaslState.PROCESS_APIVERSIONS_RESPONSE);
         authenticate();
     }
 
@@ -274,8 +274,8 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     @Override
-    public Long clientSessionReauthenticationTimeMs() {
-        return clientSessionReauthenticationTimeMs;
+    public Long clientSessionReauthenticationTimeNanos() {
+        return clientSessionReauthenticationTimeNanos;
     }
 
     @Override
@@ -308,34 +308,39 @@ public class SaslClientAuthenticator implements Authenticator {
             LOG.debug("Set SASL client state to {}", saslState);
             if (saslState == SaslState.COMPLETE) {
                 setAuthenticationEndAndSessionReauthenticationTimes();
-                /*
-                 * Re-authentication is triggered by a write, so we have to make sure that
-                 * pending write is actually sent.
-                 */
-                transportLayer.addInterestOps(SelectionKey.OP_WRITE);
+                if (reauthenticating)
+                    /*
+                     * Re-authentication is triggered by a write, so we have to make sure that
+                     * pending write is actually sent.
+                     */
+                    transportLayer.addInterestOps(SelectionKey.OP_WRITE);
+                else
+                    transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
             }
         }
     }
 
     private void setAuthenticationEndAndSessionReauthenticationTimes() {
         authenticationEndMs = time.milliseconds();
+        long authenticationEndNanos = time.nanoseconds();
+        long clientSessionReauthenticationTimeMs = 0;
         if (positiveSessionLifetimeMs != null) {
             // pick a random percentage between 85% and 95% for session re-authentication
             double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
             double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
-            double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount + RNG.nextDouble()
-                    * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
-            clientSessionReauthenticationTimeMs = authenticationEndMs
-                    + (long) (positiveSessionLifetimeMs.longValue() * pctToUse);
+            double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount
+                    + RNG.nextDouble() * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
+            long sessionLifetimeMsToUse = (long) (positiveSessionLifetimeMs.longValue() * pctToUse);
+            clientSessionReauthenticationTimeMs = authenticationEndMs + sessionLifetimeMsToUse;
+            clientSessionReauthenticationTimeNanos = authenticationEndNanos + 1000 * 1000 * sessionLifetimeMsToUse;
         }
         LOG.debug("{} at {} with {} and {}", reauthenticating ? "Re-authenticated" : "Authenticated",
                 new Date(authenticationEndMs),
-                clientSessionReauthenticationTimeMs == null ? "no session expiration"
+                clientSessionReauthenticationTimeNanos == null ? "no session expiration"
                         : ("session expiration "
                                 + new Date(authenticationEndMs + positiveSessionLifetimeMs.longValue())),
-                clientSessionReauthenticationTimeMs == null ? "no session re-authentication"
-                        : ("session re-authentication on or after "
-                                + new Date(clientSessionReauthenticationTimeMs.longValue())));
+                clientSessionReauthenticationTimeNanos == null ? "no session re-authentication"
+                        : ("session re-authentication on or after " + new Date(clientSessionReauthenticationTimeMs)));
     }
 
     /**

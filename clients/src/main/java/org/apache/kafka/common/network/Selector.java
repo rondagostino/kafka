@@ -552,8 +552,8 @@ public class Selector implements Selectable, AutoCloseable {
                     Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel
                             .getAndClearResponsesReceivedDuringReauthentication();
                     if (responsesReceivedDuringReauthentication != null)
-                        for (NetworkReceive receive : responsesReceivedDuringReauthentication)
-                            addToStagedReceives(channel, receive);
+                        responsesReceivedDuringReauthentication
+                                .forEach(receive -> addToStagedReceives(channel, receive));
                 }
 
                 attemptRead(key, channel);
@@ -569,19 +569,18 @@ public class Selector implements Selectable, AutoCloseable {
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
-                if (channel.ready() && key.isWritable()) {
-                    if (!channel.maybeBeginClientReauthentication(time.milliseconds())) {
-                        Send send;
-                        try {
-                            send = channel.write();
-                        } catch (Exception e) {
-                            sendFailed = true;
-                            throw e;
-                        }
-                        if (send != null) {
-                            this.completedSends.add(send);
-                            this.sensors.recordBytesSent(channel.id(), send.size());
-                        }
+                if (channel.ready() && key.isWritable()
+                        && !channel.maybeBeginClientReauthentication(time.nanoseconds())) {
+                    Send send;
+                    try {
+                        send = channel.write();
+                    } catch (Exception e) {
+                        sendFailed = true;
+                        throw e;
+                    }
+                    if (send != null) {
+                        this.completedSends.add(send);
+                        this.sensors.recordBytesSent(channel.id(), send.size());
                     }
                 }
 

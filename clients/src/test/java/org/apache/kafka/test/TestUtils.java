@@ -365,7 +365,7 @@ public class TestUtils {
     public static boolean maybeBeginServerReauthentication(KafkaChannel channel, NetworkReceive networkReceive) {
         try {
             if (RequestHeader.parse(networkReceive.payload().duplicate()).apiKey() == ApiKeys.SASL_HANDSHAKE) {
-                return channel.maybeBeginServerReauthentication(networkReceive, Time.SYSTEM.milliseconds());
+                return channel.maybeBeginServerReauthentication(networkReceive, Time.SYSTEM.nanoseconds());
             }
         } catch (Exception e) {
             // ignore

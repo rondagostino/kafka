@@ -32,7 +32,7 @@ import javax.security.sasl.SaslServerFactory;
 
 import org.apache.kafka.common.errors.SaslAuthenticationException;
 import org.apache.kafka.common.security.auth.SaslExtensions;
-import org.apache.kafka.common.security.JaasUtils;
+import org.apache.kafka.common.security.authenticator.SaslUtils;
 import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerExtensionsValidatorCallback;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
@@ -119,7 +119,7 @@ public class OAuthBearerSaslServer implements SaslServer {
             throw new IllegalStateException("Authentication exchange has not completed");
         if (NEGOTIATED_PROPERTY_KEY_TOKEN.equals(propName))
             return tokenForNegotiatedProperty;
-        if (JaasUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY.equals(propName))
+        if (SaslUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY.equals(propName))
             return tokenForNegotiatedProperty.lifetimeMs();
         return extensions.map().get(propName);
     }

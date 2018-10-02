@@ -704,23 +704,24 @@ private[kafka] class Processor(val id: Int,
         openOrClosingChannel(receive.source) match {
           case Some(channel) =>
             val header = RequestHeader.parse(receive.payload)
-            if (header.apiKey() == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive, time.milliseconds))
+            if (header.apiKey() == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive, time.nanoseconds))
               trace(s"Begin re-authentication: $channel")
             else {
               if (channel.serverAuthenticationSessionExpired(time.nanoseconds)) {
                 channel.disconnect()
                 debug(s"Disconnected expired channel: $channel")
                 expiredConnectionsKilledCount.inc()
-                throw new RuntimeException("Disconnected expired session: " + channel + "; " + header)
+                debug(s"Disconnected expired session: $channel : $header")
+              } else {
+                val connectionId = receive.source
+                val context = new RequestContext(header, connectionId, channel.socketAddress,
+                  channel.principal, listenerName, securityProtocol)
+                val req = new RequestChannel.Request(processor = id, context = context,
+                  startTimeNanos = time.nanoseconds, memoryPool, receive.payload, requestChannel.metrics)
+                requestChannel.sendRequest(req)
+                selector.mute(connectionId)
+                handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)
               }
-              val connectionId = receive.source
-              val context = new RequestContext(header, connectionId, channel.socketAddress,
-                channel.principal, listenerName, securityProtocol)
-              val req = new RequestChannel.Request(processor = id, context = context,
-                startTimeNanos = time.nanoseconds, memoryPool, receive.payload, requestChannel.metrics)
-              requestChannel.sendRequest(req)
-              selector.mute(connectionId)
-              handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)
             }
           case None =>
             // This should never happen since completed receives are processed immediately after `poll()`

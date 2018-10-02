@@ -25,7 +25,7 @@ import java.util.Objects;
 public class ReauthenticationContext {
     private final NetworkReceive networkReceive;
     private final Authenticator previousAuthenticator;
-    private final long reauthenticationBeginMs;
+    private final long reauthenticationBeginNanos;
 
     /**
      * Constructor
@@ -40,14 +40,16 @@ public class ReauthenticationContext {
      *            must contain the {@code SaslHandshakeRequest} that has been
      *            received on the server and that initiates re-authentication.
      * 
-     * @param now
-     *            the current time in milliseconds since the epoch. This defines the
-     *            moment when re-authentication begins.
+     * @param nowNanos
+     *            the current time. The value is in nanoseconds as per
+     *            {@code System.nanoTime()} and is therefore only useful when
+     *            compared to such a value -- it's absolute value is meaningless.
+     *            This defines the moment when re-authentication begins.
      */
-    public ReauthenticationContext(Authenticator previousAuthenticator, NetworkReceive networkReceive, long now) {
+    public ReauthenticationContext(Authenticator previousAuthenticator, NetworkReceive networkReceive, long nowNanos) {
         this.previousAuthenticator = Objects.requireNonNull(previousAuthenticator);
         this.networkReceive = networkReceive;
-        this.reauthenticationBeginMs = now;
+        this.reauthenticationBeginNanos = nowNanos;
     }
 
     /**
@@ -76,12 +78,14 @@ public class ReauthenticationContext {
     }
 
     /**
-     * Return the time when re-authentication began, in milliseconds since the epoch
+     * Return the time when re-authentication began. The value is in nanoseconds as
+     * per {@code System.nanoTime()} and is therefore only useful when compared to
+     * such a value -- it's absolute value is meaningless.
      * 
-     * @return the time when re-authentication began, in milliseconds since the
-     *         epoch
+     * 
+     * @return the time when re-authentication began
      */
-    public long reauthenticationBeginMs() {
-        return reauthenticationBeginMs;
+    public long reauthenticationBeginNanos() {
+        return reauthenticationBeginNanos;
     }
 }

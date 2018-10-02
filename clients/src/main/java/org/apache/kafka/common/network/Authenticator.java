@@ -99,16 +99,18 @@ public interface Authenticator extends Closeable {
 
     /**
      * Return the time on or after which a client should re-authenticate this
-     * session, if any, otherwise null. The value is in milliseconds since the epoch
-     * and may be non-null only on the client-side. It will be a random time between
-     * 85% and 95% of the full session lifetime to account for latency between
-     * client and server and to avoid re-authentication storms that could be caused
-     * by many sessions re-authenticating simultaneously.
+     * session, if any, otherwise null. The value is in nanoseconds as per
+     * {@code System.nanoTime()} and is therefore only useful when compared to such
+     * a value -- it's absolute value is meaningless. This value may be non-null
+     * only on the client-side. It will be a random time between 85% and 95% of the
+     * full session lifetime to account for latency between client and server and to
+     * avoid re-authentication storms that could be caused by many sessions
+     * re-authenticating simultaneously.
      * 
      * @return the time on or after which a client should re-authenticate this
      *         session, if any, otherwise null
      */
-    default Long clientSessionReauthenticationTimeMs() {
+    default Long clientSessionReauthenticationTimeNanos() {
         return null;
     }
 

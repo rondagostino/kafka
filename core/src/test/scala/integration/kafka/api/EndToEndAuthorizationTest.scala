@@ -205,14 +205,26 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
     val consumer = createConsumer()
     consumer.assign(List(tp).asJava)
     consumeRecords(consumer, numRecords)
+    confirmReauthenticationMetrics
   }
 
+  protected def confirmReauthenticationMetrics() : Unit = {
+    servers.foreach { s =>
+        val numExpiredKilled = TestUtils.totalMetricValue(s, "ExpiredConnectionsKilledCount")
+        assertTrue("Should have been zero expired connections killed: " + numExpiredKilled, numExpiredKilled == 0)
+    }
+    servers.foreach { s =>
+      assertTrue("failed re-authentications not 0", TestUtils.totalMetricValue(s, "failed-reauthentication-total") == 0)
+    }
+  }
+  
   @Test
   def testProduceConsumeViaSubscribe(): Unit = {
     setAclsAndProduce(tp)
     val consumer = createConsumer()
     consumer.subscribe(List(topic).asJava)
     consumeRecords(consumer, numRecords)
+    confirmReauthenticationMetrics
   }
 
   @Test
@@ -223,6 +235,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
     val consumer = createConsumer()
     consumer.subscribe(List(topic).asJava)
     consumeRecords(consumer, numRecords)
+    confirmReauthenticationMetrics
   }
 
   @Test
@@ -233,6 +246,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
     val consumer = createConsumer()
     consumer.subscribe(List(topic).asJava)
     consumeRecords(consumer, numRecords)
+    confirmReauthenticationMetrics
   }
 
   @Test
@@ -243,6 +257,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
     val consumer = createConsumer()
     consumer.assign(List(tp2).asJava)
     consumeRecords(consumer, numRecords, topic = tp2.topic)
+    confirmReauthenticationMetrics
   }
 
   private def setWildcardResourceAcls() {
@@ -281,6 +296,10 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
   def testNoProduceWithoutDescribeAcl(): Unit = {
     val producer = createProducer()
     sendRecords(producer, numRecords, tp)
+    confirmReauthenticationMetrics
+    servers.foreach { s =>
+        assertTrue("successful re-authentications not > 0", TestUtils.totalMetricValue(s, "successful-reauthentication-total") > 0)
+    }
   }
 
   @Test
@@ -297,6 +316,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
       case e: TopicAuthorizationException =>
         assertEquals(Set(topic).asJava, e.unauthorizedTopics())
     }
+    confirmReauthenticationMetrics
   }
   
    /**
@@ -310,6 +330,10 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
     consumer.assign(List(tp).asJava)
     // the exception is expected when the consumer attempts to lookup offsets
     consumeRecords(consumer)
+    confirmReauthenticationMetrics
+    servers.foreach { s =>
+        assertTrue("successful re-authentications not > 0", TestUtils.totalMetricValue(s, "successful-reauthentication-total") > 0)
+    }
   }
   
   @Test(expected = classOf[TopicAuthorizationException])
@@ -352,6 +376,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
       case e: TopicAuthorizationException =>
         assertEquals(Set(topic).asJava, e.unauthorizedTopics())
     }
+    confirmReauthenticationMetrics
   }
   
   @Test
@@ -367,6 +392,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
       case e: TopicAuthorizationException =>
         assertEquals(Set(topic).asJava, e.unauthorizedTopics())
     }
+    confirmReauthenticationMetrics
   }
   
   private def noConsumeWithDescribeAclSetup(): Unit = {
@@ -402,6 +428,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
       case e: GroupAuthorizationException =>
         assertEquals(group, e.groupId())
     }
+    confirmReauthenticationMetrics
   }
 
   protected final def sendRecords(producer: KafkaProducer[Array[Byte], Array[Byte]],

@@ -35,6 +35,7 @@ import org.apache.kafka.common.{KafkaException, Reconfigurable}
 import org.apache.kafka.common.memory.{MemoryPool, SimpleMemoryPool}
 import org.apache.kafka.common.metrics._
 import org.apache.kafka.common.metrics.stats.Meter
+import org.apache.kafka.common.metrics.stats.Total
 import org.apache.kafka.common.network.KafkaChannel.ChannelMuteEvent
 import org.apache.kafka.common.network.{ChannelBuilder, ChannelBuilders, KafkaChannel, ListenerName, Selectable, Send, Selector => KSelector}
 import org.apache.kafka.common.protocol.ApiKeys
@@ -550,7 +551,9 @@ private[kafka] class Processor(val id: Int,
     Map(NetworkProcessorMetricTag -> id.toString)
   )
   
-  val expiredConnectionsKilledCount = newCounter("ExpiredConnectionsKilledCount")
+  val expiredConnectionsKilledCount = new Total()
+  private val expiredConnectionsKilledCountMetricName = metrics.metricName("ExpiredConnectionsKilledCount", "socket-server-metrics", metricTags)
+  metrics.addMetric(expiredConnectionsKilledCountMetricName, expiredConnectionsKilledCount)
 
   private val selector = createSelector(
     ChannelBuilders.serverChannelBuilder(listenerName,
@@ -709,9 +712,8 @@ private[kafka] class Processor(val id: Int,
             else {
               if (channel.serverAuthenticationSessionExpired(time.nanoseconds)) {
                 channel.disconnect()
-                debug(s"Disconnected expired channel: $channel")
-                expiredConnectionsKilledCount.inc()
-                debug(s"Disconnected expired session: $channel : $header")
+                debug(s"Disconnected expired channel: $channel : $header")
+                expiredConnectionsKilledCount.record(null, 1, 0)
               } else {
                 val connectionId = receive.source
                 val context = new RequestContext(header, connectionId, channel.socketAddress,
@@ -897,6 +899,7 @@ private[kafka] class Processor(val id: Int,
   override def shutdown(): Unit = {
     super.shutdown()
     removeMetric("IdlePercent", Map("networkProcessor" -> id.toString))
+    metrics.removeMetric(expiredConnectionsKilledCountMetricName)
   }
 
 }

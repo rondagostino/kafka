@@ -1839,9 +1839,26 @@ public class SaslAuthenticatorTest {
         ChannelState finalState = createAndCheckClientConnectionFailure(securityProtocol, node);
         Exception exception = finalState.exception();
         assertTrue("Invalid exception class " + exception.getClass(), exception instanceof SaslAuthenticationException);
-        if (expectedErrorMessage == null)
-            expectedErrorMessage = "Authentication failed due to invalid credentials with SASL mechanism " + mechanism;
-        assertEquals(expectedErrorMessage, exception.getMessage());
+        if (expectedErrorMessage != null)
+            // check for full equality
+            assertTrue(exception.getMessage().equals(expectedErrorMessage));
+        else {
+            /*
+             * The failure could have come during initial authentication or during
+             * re-authentication if we are re-authenticating, so we have to check both
+             * possible error message prefixes in that case (waitAndReauthenticate == true)
+             */
+            for (boolean occurredDuringReauthentication : waitAndReauthenticate ? new boolean[] {true, false}
+                    : new boolean[] {false}) {
+                String expectedErrorMessagePrefix = "Authentication failed during "
+                        + (occurredDuringReauthentication ? "re-authentication" : "authentication")
+                        + " due to invalid credentials with SASL mechanism " + mechanism + ": ";
+                if (exception.getMessage().startsWith(expectedErrorMessagePrefix))
+                    return;
+            }
+            // we didn't match a recognized error message, so fail
+            fail("Incorrect failure message: " + exception.getMessage());
+        }
     }
 
     private ChannelState createAndCheckClientConnectionFailure(SecurityProtocol securityProtocol, String node)

@@ -170,7 +170,7 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
   this.serverConfig.setProperty(KafkaConfig.OffsetsTopicReplicationFactorProp, "3")
   this.serverConfig.setProperty(KafkaConfig.MinInSyncReplicasProp, "3")
   this.serverConfig.setProperty(KafkaConfig.DefaultReplicationFactorProp, "3")
-  this.serverConfig.setProperty(KafkaConfig.ConnectionsMaxReauthMsProp, "1000")
+  this.serverConfig.setProperty(KafkaConfig.ConnectionsMaxReauthMsProp, "1500")
   this.consumerConfig.setProperty(ConsumerConfig.GROUP_ID_CONFIG, "group")
 
   /**
@@ -297,9 +297,6 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
     val producer = createProducer()
     sendRecords(producer, numRecords, tp)
     confirmReauthenticationMetrics
-    servers.foreach { s =>
-        assertTrue("successful re-authentications not > 0", TestUtils.totalMetricValue(s, "successful-reauthentication-total") > 0)
-    }
   }
 
   @Test
@@ -331,9 +328,6 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
     // the exception is expected when the consumer attempts to lookup offsets
     consumeRecords(consumer)
     confirmReauthenticationMetrics
-    servers.foreach { s =>
-        assertTrue("successful re-authentications not > 0", TestUtils.totalMetricValue(s, "successful-reauthentication-total") > 0)
-    }
   }
   
   @Test(expected = classOf[TopicAuthorizationException])

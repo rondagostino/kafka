@@ -554,7 +554,7 @@ public class SaslServerAuthenticator implements Authenticator {
                 clientMechanism = handleHandshakeRequest(requestContext, (SaslHandshakeRequest) requestAndSize.request);
                 if (previousSaslMechanism != null && !previousSaslMechanism.equals(clientMechanism)) {
                     LOG.debug(
-                            "SASL mechanism '{}' requested by client is not supported for re-authentication of mechnism '{}'",
+                            "SASL mechanism '{}' requested by client is not supported for re-authentication of mechanism '{}'",
                             clientMechanism, previousSaslMechanism);
                     buildResponseOnAuthenticateFailure(requestContext, new SaslHandshakeResponse(
                             Errors.UNSUPPORTED_SASL_MECHANISM, new HashSet<>(Arrays.asList(previousSaslMechanism))));

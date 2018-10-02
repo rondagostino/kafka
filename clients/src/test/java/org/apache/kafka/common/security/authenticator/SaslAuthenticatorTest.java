@@ -1349,7 +1349,7 @@ public class SaslAuthenticatorTest {
                         OAuthBearerTokenCallback oauthBearerTokenCallback = (OAuthBearerTokenCallback) callback;
                         OAuthBearerToken token = oauthBearerTokenCallback.token();
                         if (token != null) {
-                            String pchangedPrincipalNameToUse = token.principalName()
+                            String changedPrincipalNameToUse = token.principalName()
                                     + String.valueOf(++numInvocations);
                             String headerJson = "{" + claimOrHeaderJsonText("alg", "none") + "}";
                             /*
@@ -1362,7 +1362,7 @@ public class SaslAuthenticatorTest {
                                 claimsJson = String.format("{%s,%s,%s}",
                                         expClaimText(Long.parseLong(lifetimeSecondsValueToUse)),
                                         claimOrHeaderJsonText("iat", time.milliseconds() / 1000.0),
-                                        claimOrHeaderJsonText("sub", pchangedPrincipalNameToUse));
+                                        claimOrHeaderJsonText("sub", changedPrincipalNameToUse));
                             } catch (NumberFormatException e) {
                                 throw new OAuthBearerConfigException(e.getMessage());
                             }
@@ -1381,7 +1381,6 @@ public class SaslAuthenticatorTest {
                         }
                     }
                 }
-
         }
 
         private static String claimOrHeaderJsonText(String claimName, String claimValue) {
@@ -1422,6 +1421,9 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         try {
             createAndCheckClientConnection(securityProtocol, node);
+            // we require a failure only during re-authentication
+            if (waitAndReauthenticate)
+                fail("Should not have been able to re-authenticate with a new principal");
         } catch (AssertionError e) {
             // we expect the failure only during re-authentication
             if (!waitAndReauthenticate)
@@ -1493,6 +1495,45 @@ public class SaslAuthenticatorTest {
         boolean expectSuccess = !waitAndReauthenticate;
         if (success && !expectSuccess)
             fail("Reauthentication with a different mechanism succeeded; it should not have");
+    }
+
+    /**
+     * Second re-authentication must fail if it is sooner than one second after the first
+     */
+    @Test
+    public void testCannotReauthenticateAgainFasterThanOneSecond() throws Exception {
+        String node = "0";
+        SecurityProtocol securityProtocol = SecurityProtocol.SASL_SSL;
+        configureMechanisms(OAuthBearerLoginModule.OAUTHBEARER_MECHANISM,
+                Arrays.asList(OAuthBearerLoginModule.OAUTHBEARER_MECHANISM));
+        server = createEchoServer(securityProtocol);
+        // negative value means don't close selector so we can continue to use it
+        createAndCheckClientConnection(securityProtocol, node, -1);
+        try {
+            if (waitAndReauthenticate) {
+                final long startTime = System.currentTimeMillis();
+                long delayMillis = (long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1);
+                while ((System.currentTimeMillis() - startTime) < delayMillis)
+                    Thread.sleep(100L);
+                NetworkTestUtils.checkClientConnection(selector, node, 1, 1);
+                fail("Expected the session to be killed");
+            }
+        } catch (AssertionError e) {
+            /*
+             * The checkCLientConnection(selector, node, 1, 1) call will return an error
+             * saying it expected the one byte-plus-node response but got the
+             * SaslHandshakeRequest instead
+             */
+            String expectedResponseTextRegex = "\\w-" + node;
+            String receivedResponseTextRegex = ".*" + OAuthBearerLoginModule.OAUTHBEARER_MECHANISM;
+            assertTrue(
+                    "Should have received the SaslHandshakeRequest bytes back since we re-authenticated too quickly, but instead we got our generated message echoed back, implying re-auth succeeded when it should not have",
+                    e.getMessage()
+                            .matches(".*\\<\\[" + expectedResponseTextRegex + "]>.*\\<\\[" + receivedResponseTextRegex + "]>"));
+        } finally { 
+            selector.close();
+            selector = null;
+        }
     }
 
     /**
@@ -1781,14 +1822,16 @@ public class SaslAuthenticatorTest {
         NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         if (waitAndReauthenticate) {
             final long startTime = System.currentTimeMillis();
-            long delayMillis = (long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1 * reauthSleepFactor);
+            long delayMillis = (long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1 * Math.abs(reauthSleepFactor));
             while ((System.currentTimeMillis() - startTime) < delayMillis)
                 Thread.sleep(100L);
             NetworkTestUtils.waitForChannelReady(selector, node);
             NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         }
-        selector.close();
-        selector = null;
+        if (reauthSleepFactor > 0) {
+            selector.close();
+            selector = null;
+        }
     }
 
     private void createAndCheckClientAuthenticationFailure(SecurityProtocol securityProtocol, String node,

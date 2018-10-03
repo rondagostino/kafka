@@ -128,25 +128,39 @@ public class NioEchoServer extends Thread {
 
     public void verifyAuthenticationMetrics(int successfulAuthentications, final int failedAuthentications)
             throws InterruptedException {
-        waitForMetric("successful-authentication", successfulAuthentications, true, true, false, false, metricForensics());
+        waitForMetric("successful-authentication", successfulAuthentications, true, true, false, false,
+                metricForensics());
         waitForMetric("failed-authentication", failedAuthentications, true, true, false, false, metricForensics());
     }
 
-    public void verifyReauthenticationMetrics(int successfulReuthentications, final int failedReuthentications)
+    public void verifyReauthenticationMetrics(int successfulReauthentications, final int failedReauthentications)
             throws InterruptedException {
-        waitForMetric("successful-reauthentication", successfulReuthentications, true, true, false, false, metricForensics());
-        waitForMetric("failed-reauthentication", failedReuthentications, true, true, false, false, metricForensics());
+        waitForMetric("successful-reauthentication", successfulReauthentications, true, true, false, false,
+                metricForensics());
+        waitForMetric("failed-reauthentication", failedReauthentications, true, true, false, false, metricForensics());
     }
 
-    public void verifyReauthenticationMetricsIncludingLatency(int successfulReuthentications, final int failedReuthentications)
+    public void verifyAuthenticationMetrics(int successfulAuthentications, final int failedAuthentications,
+            int successfulReauthentications, final int failedReauthentications, boolean includeReauthenticationLatency,
+            int successfulAuthenticationNoReauths)
             throws InterruptedException {
-        verifyReauthenticationMetrics(successfulReuthentications, failedReuthentications);
+        verifyAuthenticationMetrics(successfulAuthentications, failedAuthentications);
+        if (includeReauthenticationLatency)
+            verifyReauthenticationMetricsIncludingLatency(successfulReauthentications, failedReauthentications);
+        else
+            verifyReauthenticationMetrics(successfulReauthentications, failedReauthentications);
+        verifyAuthenticationNoReauthMetric(successfulAuthenticationNoReauths);
+    }
+
+    public void verifyReauthenticationMetricsIncludingLatency(int successfulReauthentications,
+            final int failedReauthentications) throws InterruptedException {
+        verifyReauthenticationMetrics(successfulReauthentications, failedReauthentications);
         // non-zero re-authentications implies some latency recorded
-        waitForMetric("reauthentication-latency", Math.signum(successfulReuthentications), false, false, true, true, metricForensics());
+        waitForMetric("reauthentication-latency", Math.signum(successfulReauthentications), false, false, true, true,
+                metricForensics());
     }
 
-    public void verifyAuthenticationNoReauthMetric(int successfulAuthenticationNoReauths)
-            throws InterruptedException {
+    public void verifyAuthenticationNoReauthMetric(int successfulAuthenticationNoReauths) throws InterruptedException {
         waitForMetric("successful-authentication-no-reauth", successfulAuthenticationNoReauths, true, false);
     }
 

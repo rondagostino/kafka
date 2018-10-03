@@ -121,7 +121,7 @@ import static org.junit.Assert.fail;
 @RunWith(value = Parameterized.class)
 public class SaslAuthenticatorTest {
 
-    private static final long CONNECTIONS_MAX_REAUTH_MS_VALUE = 500L;
+    private static final long CONNECTIONS_MAX_REAUTH_MS_VALUE = 100L;
     private static final int BUFFER_SIZE = 4 * 1024;
     private static Time time = Time.SYSTEM;
 
@@ -175,9 +175,8 @@ public class SaslAuthenticatorTest {
 
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnection(securityProtocol, node);
-        server.verifyAuthenticationMetrics(1, 0);
-        // don't test latency since it happens so fast it is zero
-        server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
+        // don't test re-authentication latency since it happens so fast it is zero
+        server.verifyAuthenticationMetrics(1, 0, waitAndReauthenticate ? 1 : 0, 0, false, 0);
     }
 
     /**
@@ -191,10 +190,8 @@ public class SaslAuthenticatorTest {
 
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnection(securityProtocol, node);
-        server.verifyAuthenticationMetrics(1, 0);
-        // don't test latency since it happens so fast it is zero
-        server.verifyReauthenticationMetrics(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        // don't test re-authentication latency since it happens so fast it is zero
+        server.verifyAuthenticationMetrics(1, 0, waitAndReauthenticate ? 1 : 0, 0, false, 0);
     }
 
     /**
@@ -210,9 +207,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "PLAIN",
                 "Authentication failed: Invalid username or password");
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
     }
 
     /**
@@ -228,9 +223,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "PLAIN",
                 "Authentication failed: Invalid username or password");
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
     }
 
     /**
@@ -334,9 +327,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         updateScramCredentialCache(TestJaasConfig.USERNAME, TestJaasConfig.PASSWORD);
         createAndCheckClientConnection(securityProtocol, "0");
-        server.verifyAuthenticationMetrics(1, 0);
-        server.verifyReauthenticationMetricsIncludingLatency(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(1, 0, waitAndReauthenticate ? 1 : 0, 0, true, 0);
     }
 
     /**
@@ -372,9 +363,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         updateScramCredentialCache(TestJaasConfig.USERNAME, TestJaasConfig.PASSWORD);
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
     }
 
     /**
@@ -393,9 +382,7 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
         updateScramCredentialCache(TestJaasConfig.USERNAME, TestJaasConfig.PASSWORD);
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
     }
 
     /**
@@ -413,15 +400,11 @@ public class SaslAuthenticatorTest {
         String node = "1";
         saslClientConfigs.put(SaslConfigs.SASL_MECHANISM, "SCRAM-SHA-256");
         createAndCheckClientAuthenticationFailure(securityProtocol, node, "SCRAM-SHA-256", null);
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
 
         saslClientConfigs.put(SaslConfigs.SASL_MECHANISM, "SCRAM-SHA-512");
         createAndCheckClientConnection(securityProtocol, "2");
-        server.verifyAuthenticationMetrics(1, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(1, 1, waitAndReauthenticate ? 1 : 0, 0, true, 0);
     }
 
     /**
@@ -463,9 +446,7 @@ public class SaslAuthenticatorTest {
 
         //Check invalid tokenId/tokenInfo in tokenCache
         createAndCheckClientConnectionFailure(securityProtocol, "0");
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
 
         //Check valid token Info and invalid credentials
         KafkaPrincipal owner = SecurityUtils.parseKafkaPrincipal("User:Owner");
@@ -474,16 +455,12 @@ public class SaslAuthenticatorTest {
             System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
         server.tokenCache().addToken(tokenId, tokenInfo);
         createAndCheckClientConnectionFailure(securityProtocol, "0");
-        server.verifyAuthenticationMetrics(0, 2);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 2, 0, 0, true, 0);
 
         //Check with valid token Info and credentials
         updateTokenCredentialCache(tokenId, tokenHmac);
         createAndCheckClientConnection(securityProtocol, "0");
-        server.verifyAuthenticationMetrics(1, 2);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0); // token expiration prevents re-authentication
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(1, 2, 0, 0, true, 0); // token expiration prevents re-authentication
     }
 
     @Test
@@ -535,9 +512,7 @@ public class SaslAuthenticatorTest {
         server.tokenCache().addToken(tokenId, tokenInfo);
         updateTokenCredentialCache(tokenId, tokenHmac);
         createAndCheckClientConnection(securityProtocol, "0", windowExpansionFactor);
-        server.verifyAuthenticationMetrics(1, 0);
-        server.verifyReauthenticationMetricsIncludingLatency(waitAndReauthenticate ? 1 : 0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(1, 0, waitAndReauthenticate ? 1 : 0, 0, true, 0);
     }
 
     /**
@@ -1021,9 +996,7 @@ public class SaslAuthenticatorTest {
 
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnectionFailure(securityProtocol, node);
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
     }
 
     /**
@@ -1038,9 +1011,7 @@ public class SaslAuthenticatorTest {
 
         server = createEchoServer(securityProtocol);
         createAndCheckClientConnectionFailure(securityProtocol, node);
-        server.verifyAuthenticationMetrics(0, 1);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(0);
+        server.verifyAuthenticationMetrics(0, 1, 0, 0, true, 0);
     }
 
     /**
@@ -1178,9 +1149,7 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslPlainPlaintextClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_PLAINTEXT, "PLAIN");
-        server.verifyAuthenticationMetrics(1, 0);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(1);
+        server.verifyAuthenticationMetrics(1, 0, 0, 0, true, 1);
     }
 
     /**
@@ -1199,9 +1168,7 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslScramPlaintextClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_PLAINTEXT, "SCRAM-SHA-256");
-        server.verifyAuthenticationMetrics(1, 0);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(1);
+        server.verifyAuthenticationMetrics(1, 0, 0, 0, true, 1);
     }
 
     /**
@@ -1220,9 +1187,7 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslPlainSslClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_SSL, "PLAIN");
-        server.verifyAuthenticationMetrics(1, 0);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(1);
+        server.verifyAuthenticationMetrics(1, 0, 0, 0, true, 1);
     }
 
     /**
@@ -1241,9 +1206,7 @@ public class SaslAuthenticatorTest {
     @Test
     public void oldSaslScramSslClientWithoutSaslAuthenticateHeader() throws Exception {
         verifySaslAuthenticateHeaderInterop(true, false, SecurityProtocol.SASL_SSL, "SCRAM-SHA-512");
-        server.verifyAuthenticationMetrics(1, 0);
-        server.verifyReauthenticationMetricsIncludingLatency(0, 0);
-        server.verifyAuthenticationNoReauthMetric(1);
+        server.verifyAuthenticationMetrics(1, 0, 0, 0, true, 1);
     }
 
     /**
@@ -1517,13 +1480,13 @@ public class SaslAuthenticatorTest {
                 final long startTime = System.currentTimeMillis();
                 long delayMillis = (long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1);
                 while ((System.currentTimeMillis() - startTime) < delayMillis)
-                    Thread.sleep(100L);
+                    Thread.sleep(CONNECTIONS_MAX_REAUTH_MS_VALUE / 5);
                 NetworkTestUtils.checkClientConnection(selector, node, 1, 1);
                 fail("Expected the session to be killed");
             }
         } catch (AssertionError e) {
             /*
-             * The checkCLientConnection(selector, node, 1, 1) call will return an error
+             * The checkClientConnection(selector, node, 1, 1) call should return an error
              * saying it expected the one byte-plus-node response but got the
              * SaslHandshakeRequest instead
              */
@@ -1531,8 +1494,8 @@ public class SaslAuthenticatorTest {
             String receivedResponseTextRegex = ".*" + OAuthBearerLoginModule.OAUTHBEARER_MECHANISM;
             assertTrue(
                     "Should have received the SaslHandshakeRequest bytes back since we re-authenticated too quickly, but instead we got our generated message echoed back, implying re-auth succeeded when it should not have",
-                    e.getMessage()
-                            .matches(".*\\<\\[" + expectedResponseTextRegex + "]>.*\\<\\[" + receivedResponseTextRegex + "]>"));
+                    e.getMessage().matches(
+                            ".*\\<\\[" + expectedResponseTextRegex + "]>.*\\<\\[" + receivedResponseTextRegex + "]>"));
         } finally { 
             selector.close();
             selector = null;
@@ -1827,7 +1790,7 @@ public class SaslAuthenticatorTest {
             final long startTime = System.currentTimeMillis();
             long delayMillis = (long) (CONNECTIONS_MAX_REAUTH_MS_VALUE * 1.1 * Math.abs(reauthSleepFactor));
             while ((System.currentTimeMillis() - startTime) < delayMillis)
-                Thread.sleep(100L);
+                Thread.sleep(CONNECTIONS_MAX_REAUTH_MS_VALUE / 5);
             NetworkTestUtils.waitForChannelReady(selector, node);
             NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
         }

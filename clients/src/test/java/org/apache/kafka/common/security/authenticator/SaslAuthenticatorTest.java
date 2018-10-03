@@ -1438,9 +1438,12 @@ public class SaslAuthenticatorTest {
     private static class AlternateSaslChannelBuilder extends SaslChannelBuilder {
         private int numInvocations = 0;
 
-        public AlternateSaslChannelBuilder(SaslChannelBuilder from, Map<String, ?> configs) {
-            super(from);
-            configure(configs);
+        public AlternateSaslChannelBuilder(Mode mode, Map<String, JaasContext> jaasContexts,
+                SecurityProtocol securityProtocol, ListenerName listenerName, boolean isInterBrokerListener,
+                String clientSaslMechanism, boolean handshakeRequestEnable, CredentialCache credentialCache,
+                DelegationTokenCache tokenCache, Time time) {
+            super(mode, jaasContexts, securityProtocol, listenerName, isInterBrokerListener, clientSaslMechanism,
+                    handshakeRequestEnable, credentialCache, tokenCache, time);
         }
 
         @Override
@@ -1473,11 +1476,11 @@ public class SaslAuthenticatorTest {
         server = createEchoServer(securityProtocol);
 
         String saslMechanism = (String) saslClientConfigs.get(SaslConfigs.SASL_MECHANISM);
-        SaslChannelBuilder standardChannelBuilder = (SaslChannelBuilder) ChannelBuilders.clientChannelBuilder(
-                securityProtocol, JaasContext.Type.CLIENT, new TestSecurityConfig(saslClientConfigs), null,
-                saslMechanism, time, true);
-        this.channelBuilder = new AlternateSaslChannelBuilder(standardChannelBuilder,
-                new TestSecurityConfig(saslClientConfigs).values());
+        Map<String, ?> configs = new TestSecurityConfig(saslClientConfigs).values();
+        this.channelBuilder = new AlternateSaslChannelBuilder(Mode.CLIENT,
+                Collections.singletonMap(saslMechanism, JaasContext.loadClientContext(configs)), securityProtocol, null,
+                false, saslMechanism, true, credentialCache, null, time);
+        this.channelBuilder.configure(configs);
         this.selector = NetworkTestUtils.createSelector(channelBuilder, time);
         InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);

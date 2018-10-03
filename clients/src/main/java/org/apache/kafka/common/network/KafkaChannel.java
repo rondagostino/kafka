@@ -479,13 +479,15 @@ public class KafkaChannel {
      */
     public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive, long nowNanos)
             throws AuthenticationException, IOException {
+        if (!ready())
+            throw new IllegalStateException("KafkaChannel should always be \"ready\" upon receiving SASL Handshake");
         /*
-         * Cannot re-authenticate more than once every second; an attempt to do so
-         * will result in the SASL handshake network receive being processed normally,
-         * which results a failure result being sent to the client.
+         * Cannot re-authenticate more than once every second; an attempt to do so will
+         * result in the SASL handshake network receive being processed normally, which
+         * results a failure result being sent to the client.
          */
-        if (serverSessionExpirationTimeNanos == null || !ready()
-                || (lastReauthenticationStartNanos > 0 && nowNanos - lastReauthenticationStartNanos < MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS))
+        if (serverSessionExpirationTimeNanos == null || (lastReauthenticationStartNanos > 0
+                && nowNanos - lastReauthenticationStartNanos < MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS))
             return false;
         lastReauthenticationStartNanos = nowNanos;
         swapAuthenticatorsAndBeginReauthentication(

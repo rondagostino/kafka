@@ -110,14 +110,14 @@ class KafkaTest {
   }
 
   @Test
-  def testConnectionsDisconnectExpiredEnableDefault(): Unit = {
+  def testConnectionsMaxReauthMsDefault(): Unit = {
     val propertiesFile = prepareDefaultConfig()
     val config = KafkaConfig.fromProps(Kafka.getPropsFromArgs(Array(propertiesFile)))
     assertEquals(0L, config.valuesWithPrefixOverride("sasl_ssl.oauthbearer.").get(BrokerSecurityConfigs.CONNECTIONS_MAX_REAUTH_MS).asInstanceOf[Long])
   }
 
   @Test
-  def testConnectionsDisconnectExpiredEnableExplicit(): Unit = {
+  def testConnectionsMaxReauthMsExplicit(): Unit = {
     val propertiesFile = prepareDefaultConfig()
     val expected = 3600000
     val config = KafkaConfig.fromProps(Kafka.getPropsFromArgs(Array(propertiesFile, "--override", s"sasl_ssl.oauthbearer.connections.max.reauth.ms=${expected}")))

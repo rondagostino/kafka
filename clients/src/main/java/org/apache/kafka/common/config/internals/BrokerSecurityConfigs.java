@@ -75,8 +75,8 @@ public class BrokerSecurityConfigs {
             + "listener.name.sasl_ssl.plain.sasl.server.callback.handler.class=com.example.CustomPlainCallbackHandler.";
 
     public static final String CONNECTIONS_MAX_REAUTH_MS_DOC = "When explicitly set to a positive number (the default is 0, not a positive number), "
-            + "a session lifetime that will not exceed the configured value will be communicated to v2.1.0 or later clients when they authenticate. "
+            + "a session lifetime that will not exceed the configured value will be communicated to v2.2.0 or later clients when they authenticate. "
             + "The broker will disconnect any such connection that is not re-authenticated within the session lifetime and that is then subsequently "
             + "used for any purpose other than re-authentication. Configuration names can optionally be prefixed with listener prefix and SASL "
-            + "mechanism name in lower-case. For example, sasl_ssl.oauthbearer.connection.max.expired.ms=3600000";
+            + "mechanism name in lower-case. For example, listener.name.sasl_ssl.oauthbearer.connections.max.reauth.ms=3600000";
 }

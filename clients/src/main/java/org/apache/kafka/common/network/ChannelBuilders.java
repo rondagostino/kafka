@@ -36,7 +36,6 @@ import java.util.List;
 import java.util.Map;
 
 public class ChannelBuilders {
-    private static final Time TIME = Time.SYSTEM;
     private ChannelBuilders() { }
 
     /**
@@ -55,6 +54,7 @@ public class ChannelBuilders {
             AbstractConfig config,
             ListenerName listenerName,
             String clientSaslMechanism,
+            Time time,
             boolean saslHandshakeRequestEnable) {
 
         if (securityProtocol == SecurityProtocol.SASL_PLAINTEXT || securityProtocol == SecurityProtocol.SASL_SSL) {
@@ -64,7 +64,7 @@ public class ChannelBuilders {
                 throw new IllegalArgumentException("`clientSaslMechanism` must be non-null in client mode if `securityProtocol` is `" + securityProtocol + "`");
         }
         return create(securityProtocol, Mode.CLIENT, contextType, config, listenerName, false, clientSaslMechanism,
-                saslHandshakeRequestEnable, null, null, TIME);
+                saslHandshakeRequestEnable, null, null, time);
     }
 
     /**
@@ -79,9 +79,10 @@ public class ChannelBuilders {
                                                       SecurityProtocol securityProtocol,
                                                       AbstractConfig config,
                                                       CredentialCache credentialCache,
-                                                      DelegationTokenCache tokenCache) {
+                                                      DelegationTokenCache tokenCache,
+                                                      Time time) {
         return create(securityProtocol, Mode.SERVER, JaasContext.Type.SERVER, config, listenerName,
-                isInterBrokerListener, null, true, credentialCache, tokenCache, TIME);
+                isInterBrokerListener, null, true, credentialCache, tokenCache, time);
     }
 
     private static ChannelBuilder create(SecurityProtocol securityProtocol,
@@ -112,6 +113,7 @@ public class ChannelBuilders {
                 requireNonNullMode(mode, securityProtocol);
                 Map<String, JaasContext> jaasContexts;
                 if (mode == Mode.SERVER) {
+                    @SuppressWarnings("unchecked")
                     List<String> enabledMechanisms = (List<String>) configs.get(BrokerSecurityConfigs.SASL_ENABLED_MECHANISMS_CONFIG);
                     jaasContexts = new HashMap<>(enabledMechanisms.size());
                     for (String mechanism : enabledMechanisms)

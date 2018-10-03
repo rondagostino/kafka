@@ -561,7 +561,8 @@ private[kafka] class Processor(val id: Int,
       securityProtocol,
       config,
       credentialProvider.credentialCache,
-      credentialProvider.tokenCache))
+      credentialProvider.tokenCache,
+      time))
   // Visible to override for testing
   protected[network] def createSelector(channelBuilder: ChannelBuilder): KSelector = {
     channelBuilder match {

@@ -125,7 +125,7 @@ public interface Authenticator extends Closeable {
      *         session from the perspective of this instance, if applicable,
      *         otherwise null
      */
-    default Long reauthenticationElapsedTimeMs() {
+    default Long reauthenticationLatencyMs() {
         return null;
     }
 

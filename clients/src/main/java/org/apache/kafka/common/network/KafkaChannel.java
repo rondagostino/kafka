@@ -57,7 +57,7 @@ import java.util.function.Supplier;
  * </ul>
  */
 public class KafkaChannel {
-    private static final long ONE_SECOND_NANOS = 1000 * 1000 * 1000;
+    private static final long MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS = 1000 * 1000 * 1000;
 
     /**
      * Mute States for KafkaChannel:
@@ -121,12 +121,12 @@ public class KafkaChannel {
     private boolean disconnected;
     private ChannelMuteState muteState;
     private ChannelState state;
-    private int successfulAuthentications = 0;
+    private int successfulAuthentications;
     // At least one -- and possibly both -- of these next two values will be null
-    private Long clientSessionReauthenticationTimeNanos = null;
-    private Long serverSessionExpirationTimeNanos = null;
-    private boolean midWrite = false;
-    private long lastReauthenticationStartNanos = 0L;
+    private Long clientSessionReauthenticationTimeNanos;
+    private Long serverSessionExpirationTimeNanos;
+    private boolean midWrite;
+    private long lastReauthenticationStartNanos;
 
     public KafkaChannel(String id, TransportLayer transportLayer, Supplier<Authenticator> authenticatorCreator, int maxReceiveSize, MemoryPool memoryPool) {
         this.id = id;
@@ -482,10 +482,10 @@ public class KafkaChannel {
         /*
          * Cannot re-authenticate more than once every second; an attempt to do so
          * will result in the SASL handshake network receive being processed normally,
-         * which results in the connection being closed.
+         * which results a failure result being sent to the client.
          */
         if (serverSessionExpirationTimeNanos == null || !ready()
-                || (lastReauthenticationStartNanos > 0 && nowNanos - lastReauthenticationStartNanos < ONE_SECOND_NANOS))
+                || (lastReauthenticationStartNanos > 0 && nowNanos - lastReauthenticationStartNanos < MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS))
             return false;
         lastReauthenticationStartNanos = nowNanos;
         swapAuthenticatorsAndBeginReauthentication(
@@ -536,7 +536,7 @@ public class KafkaChannel {
      *         otherwise null
      */
     public Long reauthenticationLatencyMs() {
-        return authenticator.reauthenticationElapsedTimeMs();
+        return authenticator.reauthenticationLatencyMs();
     }
 
     /**

@@ -356,7 +356,7 @@ public class SaslServerAuthenticator implements Authenticator {
     }
 
     @Override
-    public Long reauthenticationElapsedTimeMs() {
+    public Long reauthenticationLatencyMs() {
         return reauthenticating ? Long.valueOf((authenticationEndNanos - reauthenticationBeginNanos) / 1000 / 1000) : null;
     }
 

@@ -118,7 +118,7 @@ public class SaslServerAuthenticator implements Authenticator {
     // Next SASL state to be set when outgoing writes associated with the current SASL state complete
     private SaslState pendingSaslState = null;
     // Exception that will be thrown by `authenticate()` when SaslState is set to FAILED after outbound writes complete
-    private AuthenticationException pendingException = null;
+    private AuthenticationException pendingException;
     private SaslServer saslServer;
     private String saslMechanism;
 
@@ -132,8 +132,8 @@ public class SaslServerAuthenticator implements Authenticator {
     private final Time time;
     private long reauthenticationBeginNanos;
     private long authenticationEndNanos;
-    private String previousSaslMechanism = null;
-    private KafkaPrincipal previousKafkaPrincipal = null;
+    private String previousSaslMechanism;
+    private KafkaPrincipal previousKafkaPrincipal;
 
     public SaslServerAuthenticator(Map<String, ?> configs,
                                    Map<String, AuthenticateCallbackHandler> callbackHandlers,

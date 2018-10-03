@@ -28,7 +28,6 @@ import org.apache.kafka.common.security.scram.ScramCredential;
 import org.apache.kafka.common.security.scram.internals.ScramMechanism;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
-import org.apache.kafka.test.TestCondition;
 import org.apache.kafka.test.TestUtils;
 
 import java.io.IOException;
@@ -178,19 +177,10 @@ public class NioEchoServer extends Thread {
                     assertEquals(expectedValue, metricValue(rateName), EPS);
             } else {
                 if (total)
-                    TestUtils.waitForCondition(new TestCondition() {
-                        @Override
-                        public boolean conditionMet() {
-                            return Math.abs(metricValue(totalName) - expectedValue) <= EPS;
-                        }
-                    }, "Metric not updated " + totalName);
+                    TestUtils.waitForCondition(() -> Math.abs(metricValue(totalName) - expectedValue) <= EPS,
+                            "Metric not updated " + totalName);
                 if (rate)
-                    TestUtils.waitForCondition(new TestCondition() {
-                        @Override
-                        public boolean conditionMet() {
-                            return metricValue(rateName) > 0.0;
-                        }
-                    }, "Metric not updated " + rateName);
+                    TestUtils.waitForCondition(() -> metricValue(rateName) > 0.0, "Metric not updated " + rateName);
             }
         } catch (AssertionError e) {
             if (forensics == null)
@@ -213,19 +203,9 @@ public class NioEchoServer extends Thread {
                     assertEquals(Double.NEGATIVE_INFINITY, metricValue(maxName), EPS);
             } else {
                 if (avg)
-                    TestUtils.waitForCondition(new TestCondition() {
-                        @Override
-                        public boolean conditionMet() {
-                            return metricValue(avgName) > 0.0;
-                        }
-                    }, "Metric not updated " + avgName);
+                    TestUtils.waitForCondition(() -> metricValue(avgName) > 0.0, "Metric not updated " + avgName);
                 if (max)
-                    TestUtils.waitForCondition(new TestCondition() {
-                        @Override
-                        public boolean conditionMet() {
-                            return metricValue(maxName) > 0.0;
-                        }
-                    }, "Metric not updated " + maxName);
+                    TestUtils.waitForCondition(() -> metricValue(maxName) > 0.0, "Metric not updated " + maxName);
             }
         } catch (AssertionError e) {
             if (forensics == null)

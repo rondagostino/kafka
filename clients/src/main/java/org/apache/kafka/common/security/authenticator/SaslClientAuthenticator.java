@@ -113,14 +113,14 @@ public class SaslClientAuthenticator implements Authenticator {
     private RequestHeader currentRequestHeader;
     // Version of SaslAuthenticate request/responses
     private short saslAuthenticateVersion;
-    private Deque<NetworkReceive> pendingAuthenticatedReceives = new ArrayDeque<>();
-    private ApiVersionsResponse apiVersionsResponse = null;
-    private Long positiveSessionLifetimeMs = null;
-    private boolean reauthenticating = false;
+    private Deque<NetworkReceive> pendingAuthenticatedReceives;
+    private ApiVersionsResponse apiVersionsResponse;
+    private Long positiveSessionLifetimeMs;
+    private boolean reauthenticating;
     private long reauthenticationBeginMs;
     private long authenticationEndMs;
     private final Time time;
-    private Long clientSessionReauthenticationTimeNanos = null;
+    private Long clientSessionReauthenticationTimeNanos;
 
     public SaslClientAuthenticator(Map<String, ?> configs,
                                    AuthenticateCallbackHandler callbackHandler,
@@ -158,6 +158,7 @@ public class SaslClientAuthenticator implements Authenticator {
         } catch (Exception e) {
             throw new SaslAuthenticationException("Failed to configure SaslClientAuthenticator", e);
         }
+        this.pendingAuthenticatedReceives = new ArrayDeque<>();
         this.time = time;
     }
 

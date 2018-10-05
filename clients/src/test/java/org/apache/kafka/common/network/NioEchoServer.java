@@ -67,7 +67,8 @@ public class NioEchoServer extends Thread {
     private volatile int numSent = 0;
     private volatile boolean closeKafkaChannels;
     private final DelegationTokenCache tokenCache;
-
+    private final Time time;
+    
     public NioEchoServer(ListenerName listenerName, SecurityProtocol securityProtocol, AbstractConfig config,
                          String serverHost, ChannelBuilder channelBuilder, CredentialCache credentialCache, Time time) throws Exception {
         this(listenerName, securityProtocol, config, serverHost, channelBuilder, credentialCache, 100, time);
@@ -104,6 +105,7 @@ public class NioEchoServer extends Thread {
         this.metrics = new Metrics();
         this.selector = new Selector(10000, failedAuthenticationDelayMs, metrics, time, "MetricGroup", channelBuilder, new LogContext());
         acceptorThread = new AcceptorThread();
+        this.time = time;
     }
 
     public int port() {
@@ -252,7 +254,7 @@ public class NioEchoServer extends Thread {
                 List<NetworkReceive> completedReceives = selector.completedReceives();
                 for (NetworkReceive rcv : completedReceives) {
                     KafkaChannel channel = channel(rcv.source());
-                    if (!TestUtils.maybeBeginServerReauthentication(channel, rcv)) {
+                    if (!TestUtils.maybeBeginServerReauthentication(channel, rcv, time)) {
                         String channelId = channel.id();
                         selector.mute(channelId);
                         NetworkSend send = new NetworkSend(rcv.source(), rcv.payload());

@@ -38,7 +38,8 @@ import java.util.function.Supplier;
  * Each instance has the following:
  * <ul>
  * <li>a unique ID identifying it in the {@code KafkaClient} instance via which
- * the connection was made</li>
+ * the connection was made on the client-side or in the instance where it was
+ * accepted on the server-side</li>
  * <li>a reference to the underlying {@link TransportLayer} to allow reading and
  * writing</li>
  * <li>an {@link Authenticator} that performs the authentication (or

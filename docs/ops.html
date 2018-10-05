@@ -971,7 +971,7 @@
       <tr>
         <td>The number of connections disconnected due to a client not re-authenticating and then using the connection beyond its expiration time for anything other than re-authentication</td>
         <td>kafka.network:type=SocketServer,name=ExpiredConnectionsKilledCount</td>
-        <td>ideally 0 when re-authentication is enabled, implying there are no longer any older, pre-2.1.0 clients connecting</td>
+        <td>ideally 0 when re-authentication is enabled, implying there are no longer any older, pre-2.2.0 clients connecting</td>
       </tr>
       <tr>
         <td>The average fraction of time the request handler threads are idle</td>
@@ -1189,7 +1189,7 @@
       </tr>
       <tr>
         <td>successful-authentication-no-reauth-total</td>
-        <td>Total connections that were successfully authenticated by older, pre-2.1.0 SASL clients that do not support re-authentication.</td>
+        <td>Total connections that were successfully authenticated by older, pre-2.2.0 SASL clients that do not support re-authentication.</td>
         <td>kafka.[producer|consumer|connect]:type=[producer|consumer|connect]-metrics,client-id=([-.\w]+)</td>
       </tr>
     </tbody>

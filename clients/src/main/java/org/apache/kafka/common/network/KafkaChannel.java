@@ -49,9 +49,13 @@ import java.util.function.Supplier;
  * heap for clients, though smaller pools can be used for brokers and for
  * testing out-of-memory scenarios)</li>
  * <li>a {@link NetworkReceive} representing the current incomplete/in-progress
- * response being read, if applicable</li>
- * <li>a {@link Send} representing the current request that is either waiting to
- * be sent or partially sent, if applicable</li>
+ * request (from the server-side perspective) or response (from the client-side
+ * perspective) being read, if applicable; or a non-null value that has had no
+ * data read into it yet or a null value if there is no in-progress
+ * request/response (either could be the case)</li>
+ * <li>a {@link Send} representing the current request (from the client-side
+ * perspective) or response (from the server-side perspective) that is either
+ * waiting to be sent or partially sent, if applicable, or null</li>
  * <li>a {@link ChannelMuteState} to document if the channel has been muted due
  * to memory pressure or other reasons</li>
  * </ul>

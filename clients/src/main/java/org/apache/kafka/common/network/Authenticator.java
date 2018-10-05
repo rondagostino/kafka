@@ -21,7 +21,7 @@ import org.apache.kafka.common.security.auth.KafkaPrincipal;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.Deque;
+import java.util.List;
 
 /**
  * Authentication for Channel
@@ -141,7 +141,7 @@ public interface Authenticator extends Closeable {
      *         re-authentication that are unrelated to re-authentication, if any,
      *         otherwise null
      */
-    default Deque<NetworkReceive> getAndClearResponsesReceivedDuringReauthentication() {
+    default List<NetworkReceive> getAndClearResponsesReceivedDuringReauthentication() {
         return null;
     }
     

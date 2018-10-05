@@ -25,7 +25,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.channels.SelectionKey;
-import java.util.Deque;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
 
@@ -455,9 +455,10 @@ public class KafkaChannel {
     }
 
     /**
-     * If this is a server-side connection that is ready for use (i.e. authenticated
-     * and operational) then begin the process of re-authenticating the connection
-     * and return true, otherwise return false
+     * If this is a server-side connection that has an expiration time, is not
+     * muted, and at least 1 second has passed since the prior re-authentication (if
+     * any) started then begin the process of re-authenticating the connection and
+     * return true, otherwise return false
      * 
      * @param saslHandshakeNetworkReceive
      *            the mandatory {@link NetworkReceive} containing the
@@ -468,14 +469,17 @@ public class KafkaChannel {
      *            {@code System.nanoTime()} and is therefore only useful when
      *            compared to such a value -- it's absolute value is meaningless.
      * 
-     * @return true if this is a server-side connection that is ready for use (i.e.
-     *         authenticated and operational) to indicate that the re-authentication
-     *         process has begun, otherwise false
+     * @return true if this is a server-side connection that has an expiration time,
+     *         is not muted, and at least 1 second has passed since the prior
+     *         re-authentication (if any) started to indicate that the
+     *         re-authentication process has begun, otherwise false
      * @throws AuthenticationException
      *             if re-authentication fails due to invalid credentials or other
      *             security configuration errors
      * @throws IOException
      *             if read/write fails due to an I/O error
+     * @throws IllegalStateException
+     *             if this channel is not "ready"
      */
     public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive, long nowNanos)
             throws AuthenticationException, IOException {
@@ -486,8 +490,9 @@ public class KafkaChannel {
          * result in the SASL handshake network receive being processed normally, which
          * results a failure result being sent to the client.
          */
-        if (serverSessionExpirationTimeNanos == null || (lastReauthenticationStartNanos > 0
-                && nowNanos - lastReauthenticationStartNanos < MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS))
+        if (serverSessionExpirationTimeNanos == null || muteState != ChannelMuteState.NOT_MUTED
+                || (lastReauthenticationStartNanos > 0
+                        && nowNanos - lastReauthenticationStartNanos < MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS))
             return false;
         lastReauthenticationStartNanos = nowNanos;
         swapAuthenticatorsAndBeginReauthentication(
@@ -496,30 +501,33 @@ public class KafkaChannel {
     }
 
     /**
-     * If this is a client-side connection that is ready for use (i.e. authenticated
-     * and operational) and there is both a session expiration time defined that has
-     * past and no writes are in progress then begin the process of
-     * re-authenticating the connection and return true, otherwise return false
+     * If this is a client-side connection that is not muted, there is no
+     * in-progress write, and there is a session expiration time defined that has
+     * past then begin the process of re-authenticating the connection and return
+     * true, otherwise return false
      * 
      * @param nowNanos
      *            the current time. The value is in nanoseconds as per
      *            {@code System.nanoTime()} and is therefore only useful when
      *            compared to such a value -- it's absolute value is meaningless.
      * 
-     * @return true if this is a client-side connection that is ready for use (i.e.
-     *         authenticated and operational) and there is both a session expiration
-     *         time defined that has past and no writes are in progress to indicate
-     *         that the re-authentication process has begun, otherwise false
+     * @return true if this is a client-side connection that is not muted, there is
+     *         no in-progress write, and there is a session expiration time defined
+     *         that has past to indicate that the re-authentication process has
+     *         begun, otherwise false
      * @throws AuthenticationException
      *             if re-authentication fails due to invalid credentials or other
      *             security configuration errors
      * @throws IOException
      *             if read/write fails due to an I/O error
+     * @throws IllegalStateException
+     *             if this channel is not "ready"
      */
     public boolean maybeBeginClientReauthentication(long nowNanos) throws AuthenticationException, IOException {
-        if (clientSessionReauthenticationTimeNanos == null || !ready())
-            return false;
-        if (midWrite || nowNanos < clientSessionReauthenticationTimeNanos.longValue())
+        if (!ready())
+            throw new IllegalStateException("KafkaChannel should always be \"ready\" when it is checked for possible re-authentication");
+        if (muteState != ChannelMuteState.NOT_MUTED || midWrite || clientSessionReauthenticationTimeNanos == null
+                || nowNanos < clientSessionReauthenticationTimeNanos.longValue())
             return false;
         swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(authenticator, receive, nowNanos));
         receive = null;
@@ -567,7 +575,7 @@ public class KafkaChannel {
      *         re-authentication that are unrelated to re-authentication, if any,
      *         otherwise null
      */
-    public Deque<NetworkReceive> getAndClearResponsesReceivedDuringReauthentication() {
+    public List<NetworkReceive> getAndClearResponsesReceivedDuringReauthentication() {
         return authenticator.getAndClearResponsesReceivedDuringReauthentication();
     }
     

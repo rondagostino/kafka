@@ -542,14 +542,16 @@ public class Selector implements Selectable, AutoCloseable {
                         else {
                             sensors.successfulReauthentication.record();
                             if (channel.reauthenticationLatencyMs() == null)
-                                throw new IllegalStateException();
-                            sensors.reauthenticationLatency.record(channel.reauthenticationLatencyMs().doubleValue(),
-                                    time.milliseconds());
+                                log.warn(
+                                        "Should never happen: re-authentication latency for a re-authenticated channel was null; continuing...");
+                            else
+                                sensors.reauthenticationLatency
+                                        .record(channel.reauthenticationLatencyMs().doubleValue(), time.milliseconds());
                         }
                         if (!channel.connectedClientSupportsReauthentication())
                             sensors.successfulAuthenticationNoReauth.record();
                     }
-                    Deque<NetworkReceive> responsesReceivedDuringReauthentication = channel
+                    List<NetworkReceive> responsesReceivedDuringReauthentication = channel
                             .getAndClearResponsesReceivedDuringReauthentication();
                     if (responsesReceivedDuringReauthentication != null)
                         responsesReceivedDuringReauthentication

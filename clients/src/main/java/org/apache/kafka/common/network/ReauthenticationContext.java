@@ -35,10 +35,13 @@ public class ReauthenticationContext {
      *            authenticate the channel
      * @param networkReceive
      *            the applicable {@link NetworkReceive} instance, if any. For the
-     *            client side this is a response that has been partially read, if
-     *            any, otherwise null. For the server side this is mandatory and it
-     *            must contain the {@code SaslHandshakeRequest} that has been
-     *            received on the server and that initiates re-authentication.
+     *            client side this may be a response that has been partially read, a
+     *            non-null instance that has had no data read into it yet, or null;
+     *            if it is non-null then this is the instance that data should
+     *            initially be read into during re-authentication. For the server
+     *            side this is mandatory and it must contain the
+     *            {@code SaslHandshakeRequest} that has been received on the server
+     *            and that initiates re-authentication.
      * 
      * @param nowNanos
      *            the current time. The value is in nanoseconds as per
@@ -54,11 +57,12 @@ public class ReauthenticationContext {
 
     /**
      * Return the applicable {@link NetworkReceive} instance, if any. For the client
-     * side this is a response that has been partially read, if any, otherwise null.
-     * For the server side this is mandatory and it must contain the
-     * {@code SaslHandshakeRequest} that has been received on the server and that
-     * initiates re-authentication.
-     * 
+     * side this may be a response that has been partially read, a non-null instance
+     * that has had no data read into it yet, or null; if it is non-null then this
+     * is the instance that data should initially be read into during
+     * re-authentication. For the server side this is mandatory and it must contain
+     * the {@code SaslHandshakeRequest} that has been received on the server and
+     * that initiates re-authentication.
      * 
      * @return the applicable {@link NetworkReceive} instance, if any
      */
@@ -81,7 +85,6 @@ public class ReauthenticationContext {
      * Return the time when re-authentication began. The value is in nanoseconds as
      * per {@code System.nanoTime()} and is therefore only useful when compared to
      * such a value -- it's absolute value is meaningless.
-     * 
      * 
      * @return the time when re-authentication began
      */

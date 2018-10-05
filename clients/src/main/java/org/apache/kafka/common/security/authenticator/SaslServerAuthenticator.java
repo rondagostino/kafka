@@ -105,7 +105,8 @@ public class SaslServerAuthenticator implements Authenticator {
     private static final ByteBuffer EMPTY_BUFFER = ByteBuffer.allocate(0);
 
     private enum SaslState {
-        INITIAL_REQUEST,               // May be GSSAPI token, SaslHandshake or ApiVersions
+        INITIAL_REQUEST,               // May be GSSAPI token, SaslHandshake or ApiVersions for authentication
+        REAUTH_PROCESS_HANDSHAKE,      // Initial state for re-authentication, processes SASL handshake request
         HANDSHAKE_OR_VERSIONS_REQUEST, // May be SaslHandshake or ApiVersions
         HANDSHAKE_REQUEST,             // After an ApiVersions request, next request must be SaslHandshake
         AUTHENTICATE,                  // Authentication tokens (SaslHandshake v1 and above indicate SaslAuthenticate headers)
@@ -130,7 +131,7 @@ public class SaslServerAuthenticator implements Authenticator {
     // Next SASL state to be set when outgoing writes associated with the current SASL state complete
     private SaslState pendingSaslState = null;
     // Exception that will be thrown by `authenticate()` when SaslState is set to FAILED after outbound writes complete
-    private AuthenticationException pendingException;
+    private AuthenticationException pendingException = null;
     private SaslServer saslServer;
     private String saslMechanism;
 
@@ -253,21 +254,24 @@ public class SaslServerAuthenticator implements Authenticator {
      */
     @Override
     public void authenticate() throws IOException {
-        if (netOutBuffer != null && !flushNetOutBufferAndUpdateInterestOps())
-            return;
-
-        if (saslServer != null && saslServer.isComplete()) {
-            setSaslState(SaslState.COMPLETE);
-            return;
-        }
-
-        if (netInBuffer == null)
+        if (saslState != SaslState.REAUTH_PROCESS_HANDSHAKE) {
+            if (netOutBuffer != null && !flushNetOutBufferAndUpdateInterestOps())
+                return;
+    
+            if (saslServer != null && saslServer.isComplete()) {
+                setSaslState(SaslState.COMPLETE);
+                return;
+            }
+    
             // allocate on heap (as opposed to any socket server memory pool)
-            netInBuffer = new NetworkReceive(MAX_RECEIVE_SIZE, connectionId);
-        netInBuffer.readFrom(transportLayer);
-        if (!netInBuffer.complete())
-            return;
-        netInBuffer.payload().rewind();
+            if (netInBuffer == null) netInBuffer = new NetworkReceive(MAX_RECEIVE_SIZE, connectionId);
+    
+            netInBuffer.readFrom(transportLayer);
+            if (!netInBuffer.complete())
+                return;
+            netInBuffer.payload().rewind();
+        }
+        // decrease cyclomatic complexity and eliminate checkstyle error
         processPayload();
     }
     
@@ -277,6 +281,7 @@ public class SaslServerAuthenticator implements Authenticator {
         netInBuffer = null; // reset the networkReceive as we read all the data.
         try {
             switch (saslState) {
+                case REAUTH_PROCESS_HANDSHAKE:
                 case HANDSHAKE_OR_VERSIONS_REQUEST:
                 case HANDSHAKE_REQUEST:
                     handleKafkaRequest(clientToken);
@@ -353,7 +358,8 @@ public class SaslServerAuthenticator implements Authenticator {
         netInBuffer = saslHandshakeReceive;
         LOG.debug("Beginning re-authentication: {}", this);
         netInBuffer.payload().rewind();
-        processPayload();
+        setSaslState(SaslState.REAUTH_PROCESS_HANDSHAKE);
+        authenticate();
     }
 
     @Override

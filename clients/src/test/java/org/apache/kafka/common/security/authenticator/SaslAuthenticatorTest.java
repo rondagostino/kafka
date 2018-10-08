@@ -1807,7 +1807,7 @@ public class SaslAuthenticatorTest {
         assertTrue("Invalid exception class " + exception.getClass(), exception instanceof SaslAuthenticationException);
         if (expectedErrorMessage != null)
             // check for full equality
-            assertTrue(exception.getMessage().equals(expectedErrorMessage));
+            assertEquals(expectedErrorMessage, exception.getMessage());
         else {
             /*
              * The failure could have come during initial authentication or during

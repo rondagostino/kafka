@@ -537,19 +537,20 @@ public class Selector implements Selectable, AutoCloseable {
                         throw e;
                     }
                     if (channel.ready()) {
+                        long readyTimeMs = time.milliseconds();
                         if (channel.successfulAuthentications() == 1)
-                            sensors.successfulAuthentication.record();
+                            sensors.successfulAuthentication.record(1.0, readyTimeMs);
                         else {
-                            sensors.successfulReauthentication.record();
+                            sensors.successfulReauthentication.record(1.0, readyTimeMs);
                             if (channel.reauthenticationLatencyMs() == null)
                                 log.warn(
                                         "Should never happen: re-authentication latency for a re-authenticated channel was null; continuing...");
                             else
                                 sensors.reauthenticationLatency
-                                        .record(channel.reauthenticationLatencyMs().doubleValue(), time.milliseconds());
+                                        .record(channel.reauthenticationLatencyMs().doubleValue(), readyTimeMs);
                         }
                         if (!channel.connectedClientSupportsReauthentication())
-                            sensors.successfulAuthenticationNoReauth.record();
+                            sensors.successfulAuthenticationNoReauth.record(1.0, readyTimeMs);
                     }
                     List<NetworkReceive> responsesReceivedDuringReauthentication = channel
                             .getAndClearResponsesReceivedDuringReauthentication();
@@ -571,8 +572,8 @@ public class Selector implements Selectable, AutoCloseable {
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
-                if (channel.ready() && key.isWritable()
-                        && !channel.maybeBeginClientReauthentication(time.nanoseconds())) {
+                if (channel.ready() && key.isWritable() && !channel.maybeBeginClientReauthentication(
+                    () -> channelStartTimeNanos != 0 ? channelStartTimeNanos : time.nanoseconds())) {
                     Send send;
                     try {
                         send = channel.write();

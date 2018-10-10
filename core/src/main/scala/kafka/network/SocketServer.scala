@@ -23,6 +23,7 @@ import java.nio.channels._
 import java.nio.channels.{Selector => NSelector}
 import java.util.concurrent._
 import java.util.concurrent.atomic._
+import java.util.function.Supplier
 
 import com.yammer.metrics.core.Gauge
 import kafka.cluster.{BrokerEndPoint, EndPoint}
@@ -692,6 +693,10 @@ private[kafka] class Processor(val id: Int,
     }
   }
 
+  private def nowNanosSupplier = new Supplier[java.lang.Long] {
+    override def get(): java.lang.Long = time.nanoseconds()
+  }
+
   private def poll() {
     try selector.poll(300)
     catch {
@@ -708,7 +713,8 @@ private[kafka] class Processor(val id: Int,
         openOrClosingChannel(receive.source) match {
           case Some(channel) =>
             val header = RequestHeader.parse(receive.payload)
-            if (header.apiKey() == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive, time.nanoseconds))
+            time.nanoseconds()
+            if (header.apiKey() == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive, nowNanosSupplier))
               trace(s"Begin re-authentication: $channel")
             else if (channel.serverAuthenticationSessionExpired(time.nanoseconds)) {
               channel.disconnect()

@@ -469,10 +469,11 @@ public class KafkaChannel {
      *            the mandatory {@link NetworkReceive} containing the
      *            {@code SaslHandshakeRequest} that has been received on the server
      *            and that initiates re-authentication.
-     * @param nowNanos
-     *            the current time. The value is in nanoseconds as per
-     *            {@code System.nanoTime()} and is therefore only useful when
-     *            compared to such a value -- it's absolute value is meaningless.
+     * @param nowNanosSupplier
+     *            {@code Supplier} of the current time. The value must be in
+     *            nanoseconds as per {@code System.nanoTime()} and is therefore only
+     *            useful when compared to such a value -- it's absolute value is
+     *            meaningless.
      * 
      * @return true if this is a server-side connection that has an expiration time,
      *         is not muted, and at least 1 second has passed since the prior
@@ -486,18 +487,31 @@ public class KafkaChannel {
      * @throws IllegalStateException
      *             if this channel is not "ready"
      */
-    public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive, long nowNanos)
-            throws AuthenticationException, IOException {
+    public boolean maybeBeginServerReauthentication(NetworkReceive saslHandshakeNetworkReceive,
+            Supplier<Long> nowNanosSupplier) throws AuthenticationException, IOException {
         if (!ready())
             throw new IllegalStateException("KafkaChannel should always be \"ready\" upon receiving SASL Handshake");
         /*
+         * Re-authentication is disabled if there is no session expiration time, in
+         * which case the SASL handshake network receive will be processed normally,
+         * which results in a failure result being sent to the client. Also, no need to
+         * check if we are muted since since we are processing a received packet when we
+         * invoke this.
+         */
+        if (serverSessionExpirationTimeNanos == null)
+            return false;
+        /*
+         * We've delayed getting the time as long as possible in case we don't need it,
+         * but at this point we need it -- so get it now.
+         */
+        long nowNanos = nowNanosSupplier.get().longValue();
+        /*
          * Cannot re-authenticate more than once every second; an attempt to do so will
          * result in the SASL handshake network receive being processed normally, which
-         * results a failure result being sent to the client.
+         * results in a failure result being sent to the client.
          */
-        if (serverSessionExpirationTimeNanos == null || muteState != ChannelMuteState.NOT_MUTED
-                || (lastReauthenticationStartNanos > 0
-                        && nowNanos - lastReauthenticationStartNanos < MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS))
+        if (lastReauthenticationStartNanos != 0
+                && nowNanos - lastReauthenticationStartNanos < MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS)
             return false;
         lastReauthenticationStartNanos = nowNanos;
         swapAuthenticatorsAndBeginReauthentication(
@@ -511,10 +525,11 @@ public class KafkaChannel {
      * past then begin the process of re-authenticating the connection and return
      * true, otherwise return false
      * 
-     * @param nowNanos
-     *            the current time. The value is in nanoseconds as per
-     *            {@code System.nanoTime()} and is therefore only useful when
-     *            compared to such a value -- it's absolute value is meaningless.
+     * @param nowNanosSupplier
+     *            {@code Supplier} of the current time. The value must be in
+     *            nanoseconds as per {@code System.nanoTime()} and is therefore only
+     *            useful when compared to such a value -- it's absolute value is
+     *            meaningless.
      * 
      * @return true if this is a client-side connection that is not muted, there is
      *         no in-progress write, and there is a session expiration time defined
@@ -528,11 +543,19 @@ public class KafkaChannel {
      * @throws IllegalStateException
      *             if this channel is not "ready"
      */
-    public boolean maybeBeginClientReauthentication(long nowNanos) throws AuthenticationException, IOException {
+    public boolean maybeBeginClientReauthentication(Supplier<Long> nowNanosSupplier)
+            throws AuthenticationException, IOException {
         if (!ready())
-            throw new IllegalStateException("KafkaChannel should always be \"ready\" when it is checked for possible re-authentication");
-        if (muteState != ChannelMuteState.NOT_MUTED || midWrite || clientSessionReauthenticationTimeNanos == null
-                || nowNanos < clientSessionReauthenticationTimeNanos.longValue())
+            throw new IllegalStateException(
+                    "KafkaChannel should always be \"ready\" when it is checked for possible re-authentication");
+        if (muteState != ChannelMuteState.NOT_MUTED || midWrite || clientSessionReauthenticationTimeNanos == null)
+            return false;
+        /*
+         * We've delayed getting the time as long as possible in case we don't need it,
+         * but at this point we need it -- so get it now.
+         */
+        long nowNanos = nowNanosSupplier.get().longValue();
+        if (nowNanos < clientSessionReauthenticationTimeNanos.longValue())
             return false;
         swapAuthenticatorsAndBeginReauthentication(new ReauthenticationContext(authenticator, receive, nowNanos));
         receive = null;

@@ -592,16 +592,16 @@ public class KafkaChannel {
     }
     
     /**
-     * Return the client-side {@link NetworkReceive} responses that arrived during
-     * re-authentication that are unrelated to re-authentication, if any, otherwise
-     * null. These correspond to requests sent prior to the beginning of
-     * re-authentication; the requests were made when the channel was successfully
-     * authenticated, and the responses arrived during the re-authentication
-     * process.
+     * Return the (always non-null but possibly empty) client-side
+     * {@link NetworkReceive} responses that arrived during re-authentication that
+     * are unrelated to re-authentication, if any. These correspond to requests sent
+     * prior to the beginning of re-authentication; the requests were made when the
+     * channel was successfully authenticated, and the responses arrived during the
+     * re-authentication process.
      * 
-     * @return the client-side {@link NetworkReceive} responses that arrived during
-     *         re-authentication that are unrelated to re-authentication, if any,
-     *         otherwise null
+     * @return the (always non-null but possibly empty) client-side
+     *         {@link NetworkReceive} responses that arrived during
+     *         re-authentication that are unrelated to re-authentication, if any
      */
     public List<NetworkReceive> getAndClearResponsesReceivedDuringReauthentication() {
         return authenticator.getAndClearResponsesReceivedDuringReauthentication();

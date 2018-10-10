@@ -1638,7 +1638,7 @@ public class SaslAuthenticatorTest {
                         return new SaslHandshakeRequest.Builder(saslMechanism).build((short) 0);
                     }
                     @Override
-                    protected void saslAuthenticateVersion(short version) {
+                    protected void saslAuthenticateVersion(ApiVersionsResponse apiVersionsResponse) {
                         // Don't set version so that headers are disabled
                     }
                 };

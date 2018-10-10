@@ -554,9 +554,7 @@ public class Selector implements Selectable, AutoCloseable {
                     }
                     List<NetworkReceive> responsesReceivedDuringReauthentication = channel
                             .getAndClearResponsesReceivedDuringReauthentication();
-                    if (responsesReceivedDuringReauthentication != null)
-                        responsesReceivedDuringReauthentication
-                                .forEach(receive -> addToStagedReceives(channel, receive));
+                    responsesReceivedDuringReauthentication.forEach(receive -> addToStagedReceives(channel, receive));
                 }
 
                 attemptRead(key, channel);

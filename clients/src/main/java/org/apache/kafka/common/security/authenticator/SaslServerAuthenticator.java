@@ -86,19 +86,6 @@ import java.util.Objects;
 import java.util.Set;
 
 public class SaslServerAuthenticator implements Authenticator {
-    private static class ReauthInfo {
-        public final String previousSaslMechanism;
-        public final KafkaPrincipal previousKafkaPrincipal;
-        public final long reauthenticationBeginNanos;
-
-        public ReauthInfo(String previousSaslMechanism, KafkaPrincipal previousKafkaPrincipal,
-                long reauthenticationBeginNanos) {
-            this.previousSaslMechanism = Objects.requireNonNull(previousSaslMechanism);
-            this.previousKafkaPrincipal = Objects.requireNonNull(previousKafkaPrincipal);
-            this.reauthenticationBeginNanos = reauthenticationBeginNanos;
-        }
-    }
-
     // GSSAPI limits requests to 64K, but we allow a bit extra for custom SASL mechanisms
     static final int MAX_RECEIVE_SIZE = 524288;
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerAuthenticator.class);
@@ -141,10 +128,8 @@ public class SaslServerAuthenticator implements Authenticator {
     private Send authenticationFailureSend = null;
     // flag indicating if sasl tokens are sent as Kafka SaslAuthenticate request/responses
     private boolean enableKafkaSaslAuthenticateHeaders;
-    private Long sessionExpirationTimeNanos;
-    private boolean connectedClientSupportsReauthentication;
-    private long authenticationEndNanos;
     private ReauthInfo reauthInfo;
+    private final AuthInfoForReauth authInfoForReauth;
 
     public SaslServerAuthenticator(Map<String, ?> configs,
                                    Map<String, AuthenticateCallbackHandler> callbackHandlers,
@@ -184,6 +169,7 @@ public class SaslServerAuthenticator implements Authenticator {
         // Note that the old principal builder does not support SASL, so we do not need to pass the
         // authenticator or the transport layer
         this.principalBuilder = ChannelBuilders.createPrincipalBuilder(configs, null, null, kerberosNameParser);
+        this.authInfoForReauth = new AuthInfoForReauth();
     }
 
     private void createSaslServer(String mechanism) throws IOException {
@@ -271,11 +257,6 @@ public class SaslServerAuthenticator implements Authenticator {
                 return;
             netInBuffer.payload().rewind();
         }
-        // decrease cyclomatic complexity and eliminate checkstyle error
-        processPayload();
-    }
-    
-    private void processPayload() throws IOException {
         byte[] clientToken = new byte[netInBuffer.payload().remaining()];
         netInBuffer.payload().get(clientToken, 0, clientToken.length);
         netInBuffer = null; // reset the networkReceive as we read all the data.
@@ -364,20 +345,19 @@ public class SaslServerAuthenticator implements Authenticator {
 
     @Override
     public Long serverSessionExpirationTimeNanos() {
-        return sessionExpirationTimeNanos;
+        return authInfoForReauth.sessionExpirationTimeNanos;
     }
 
     @Override
     public Long reauthenticationLatencyMs() {
-        return reauthInfo != null
-                ? Long.valueOf(
-                        (authenticationEndNanos - reauthInfo.reauthenticationBeginNanos) / 1000 / 1000)
+        return reauthInfo != null ? Long.valueOf(
+                (authInfoForReauth.authenticationEndNanos - reauthInfo.reauthenticationBeginNanos) / 1000 / 1000)
                 : null;
     }
 
     @Override
     public boolean connectedClientSupportsReauthentication() {
-        return connectedClientSupportsReauthentication;
+        return authInfoForReauth.connectedClientSupportsReauthentication;
     }
     
     /**
@@ -459,8 +439,8 @@ public class SaslServerAuthenticator implements Authenticator {
                 // This should not normally occur since clients typically check supported versions using ApiVersionsRequest
                 throw new UnsupportedVersionException("Version " + version + " is not supported for apiKey " + apiKey);
             }
-            if (!connectedClientSupportsReauthentication)
-                connectedClientSupportsReauthentication = version > 0;
+            if (!authInfoForReauth.connectedClientSupportsReauthentication)
+                authInfoForReauth.connectedClientSupportsReauthentication = version > 0;
             SaslAuthenticateRequest saslAuthenticateRequest = (SaslAuthenticateRequest) requestAndSize.request;
 
             try {
@@ -495,9 +475,9 @@ public class SaslServerAuthenticator implements Authenticator {
     private long calcCompletionTimes() {
         long retvalSessionLifetimeMs = 0L;
         long authenticationEndMs = time.milliseconds();
-        authenticationEndNanos = time.nanoseconds();
+        authInfoForReauth.authenticationEndNanos = time.nanoseconds();
         Long saslServerCredentialExpirationMs = (Long) saslServer
-                .getNegotiatedProperty(SaslUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
+                .getNegotiatedProperty(SaslInternalConfigs.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
         Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
         if (saslServerCredentialExpirationMs != null || connectionsMaxReauthMs != null) {
             if (saslServerCredentialExpirationMs == null)
@@ -510,8 +490,8 @@ public class SaslServerAuthenticator implements Authenticator {
                         Math.min(saslServerCredentialExpirationMs.longValue() - authenticationEndMs,
                                 connectionsMaxReauthMs.longValue()));
             if (retvalSessionLifetimeMs > 0L)
-                sessionExpirationTimeNanos = Long
-                        .valueOf(authenticationEndNanos + 1000 * 1000 * retvalSessionLifetimeMs);
+                authInfoForReauth.sessionExpirationTimeNanos = Long
+                        .valueOf(authInfoForReauth.authenticationEndNanos + 1000 * 1000 * retvalSessionLifetimeMs);
         }
         LOG.debug(
                 "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); session expiration = {} ({} ms), sending {} ms to client",
@@ -520,8 +500,11 @@ public class SaslServerAuthenticator implements Authenticator {
                 saslServerCredentialExpirationMs != null
                         ? Long.valueOf(saslServerCredentialExpirationMs.longValue() - authenticationEndMs)
                         : null,
-                sessionExpirationTimeNanos != null ? new Date(authenticationEndMs + retvalSessionLifetimeMs) : "N/A",
-                sessionExpirationTimeNanos != null ? retvalSessionLifetimeMs : "N/A", retvalSessionLifetimeMs);
+                authInfoForReauth.sessionExpirationTimeNanos != null
+                        ? new Date(authenticationEndMs + retvalSessionLifetimeMs)
+                        : "N/A",
+                authInfoForReauth.sessionExpirationTimeNanos != null ? retvalSessionLifetimeMs : "N/A",
+                retvalSessionLifetimeMs);
         return retvalSessionLifetimeMs;
     }
 
@@ -679,5 +662,24 @@ public class SaslServerAuthenticator implements Authenticator {
     private void sendKafkaResponse(Send send) throws IOException {
         netOutBuffer = send;
         flushNetOutBufferAndUpdateInterestOps();
+    }
+
+    private static class ReauthInfo {
+        public final String previousSaslMechanism;
+        public final KafkaPrincipal previousKafkaPrincipal;
+        public final long reauthenticationBeginNanos;
+
+        public ReauthInfo(String previousSaslMechanism, KafkaPrincipal previousKafkaPrincipal,
+                long reauthenticationBeginNanos) {
+            this.previousSaslMechanism = Objects.requireNonNull(previousSaslMechanism);
+            this.previousKafkaPrincipal = Objects.requireNonNull(previousKafkaPrincipal);
+            this.reauthenticationBeginNanos = reauthenticationBeginNanos;
+        }
+    }
+
+    private static class AuthInfoForReauth {
+        public Long sessionExpirationTimeNanos;
+        public boolean connectedClientSupportsReauthentication;
+        public long authenticationEndNanos;
     }
 }

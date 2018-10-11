@@ -18,7 +18,7 @@ package org.apache.kafka.common.security.authenticator;
 
 import org.apache.kafka.common.config.internals.BrokerSecurityConfigs;
 
-public class SaslUtils {
+public class SaslInternalConfigs {
     /**
      * The server (broker) specifies a positive session length in milliseconds to a
      * SASL client when {@link BrokerSecurityConfigs#CONNECTIONS_MAX_REAUTH_MS} is
@@ -35,7 +35,7 @@ public class SaslUtils {
      */
     public static final String CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY = "CREDENTIAL.LIFETIME.MS";
 
-    private SaslUtils() {
+    private SaslInternalConfigs() {
         // empty
     }
 }

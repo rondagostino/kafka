@@ -22,6 +22,7 @@ import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.metrics.KafkaMetric;
 import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.security.authenticator.CredentialCache;
 import org.apache.kafka.common.security.scram.ScramCredential;
@@ -39,10 +40,12 @@ import java.nio.channels.SocketChannel;
 import java.nio.channels.WritableByteChannel;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.function.BiFunction;
+import java.util.Set;
 
 import org.apache.kafka.common.security.token.delegation.internals.DelegationTokenCache;
 
@@ -52,6 +55,39 @@ import org.apache.kafka.common.security.token.delegation.internals.DelegationTok
  *
  */
 public class NioEchoServer extends Thread {
+    public enum MetricType {
+        TOTAL, RATE, AVG, MAX;
+
+        private final String metricNameSuffix;
+
+        private MetricType() {
+            metricNameSuffix = "-" + name().toLowerCase(Locale.ROOT);
+        }
+
+        public String metricNameSuffix() {
+            return metricNameSuffix;
+        }
+
+        public static Set<MetricType> setOf(MetricType metricType) {
+            return EnumSet.of(metricType);
+        }
+
+        public static Set<MetricType> setOf(MetricType e1, MetricType e2) {
+            return EnumSet.of(e1, e2);
+        }
+
+        public static Set<MetricType> setOf(MetricType e1, MetricType e2, MetricType e3) {
+            return EnumSet.of(e1, e2, e3);
+        }
+
+        public static Set<MetricType> setOf(MetricType e1, MetricType e2, MetricType e3, MetricType e4) {
+            return EnumSet.of(e1, e2, e3, e4);
+        }
+
+        public static Set<MetricType> setOf(MetricType first, MetricType... rest) {
+            return EnumSet.of(first, rest);
+        }
+    }
 
     private static final double EPS = 0.0001;
 
@@ -130,16 +166,18 @@ public class NioEchoServer extends Thread {
 
     public void verifyAuthenticationMetrics(int successfulAuthentications, final int failedAuthentications)
             throws InterruptedException {
-        waitForMetric("successful-authentication", successfulAuthentications, true, true, false, false,
-                metricForensics());
-        waitForMetric("failed-authentication", failedAuthentications, true, true, false, false, metricForensics());
+        waitForMetrics("successful-authentication", successfulAuthentications,
+                MetricType.setOf(MetricType.TOTAL, MetricType.RATE));
+        waitForMetrics("failed-authentication", failedAuthentications,
+                MetricType.setOf(MetricType.TOTAL, MetricType.RATE));
     }
 
     public void verifyReauthenticationMetrics(int successfulReauthentications, final int failedReauthentications)
             throws InterruptedException {
-        waitForMetric("successful-reauthentication", successfulReauthentications, true, true, false, false,
-                metricForensics());
-        waitForMetric("failed-reauthentication", failedReauthentications, true, true, false, false, metricForensics());
+        waitForMetrics("successful-reauthentication", successfulReauthentications,
+                MetricType.setOf(MetricType.TOTAL, MetricType.RATE));
+        waitForMetrics("failed-reauthentication", failedReauthentications,
+                MetricType.setOf(MetricType.TOTAL, MetricType.RATE));
     }
 
     public void verifyAuthenticationMetrics(int successfulAuthentications, final int failedAuthentications,
@@ -158,77 +196,36 @@ public class NioEchoServer extends Thread {
             final int failedReauthentications) throws InterruptedException {
         verifyReauthenticationMetrics(successfulReauthentications, failedReauthentications);
         // non-zero re-authentications implies some latency recorded
-        waitForMetric("reauthentication-latency", Math.signum(successfulReauthentications), false, false, true, true,
-                metricForensics());
+        waitForMetrics("reauthentication-latency", Math.signum(successfulReauthentications), MetricType.setOf(MetricType.MAX, MetricType.AVG));
     }
 
     public void verifyAuthenticationNoReauthMetric(int successfulAuthenticationNoReauths) throws InterruptedException {
-        waitForMetric("successful-authentication-no-reauth", successfulAuthenticationNoReauths, true, false);
+        waitForMetrics("successful-authentication-no-reauth", successfulAuthenticationNoReauths, MetricType.setOf(MetricType.TOTAL));
     }
 
     public void waitForMetric(String name, final double expectedValue) throws InterruptedException {
-        waitForMetric(name, expectedValue, true, true);
+        waitForMetrics(name, expectedValue, MetricType.setOf(MetricType.TOTAL, MetricType.RATE));
     }
 
-    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate)
+    public void waitForMetrics(String namePrefix, final double expectedValue, Set<MetricType> metricTypes)
             throws InterruptedException {
-        waitForMetric(name, expectedValue, total, rate, false, false, null);
-    }
-
-    public void waitForMetric(String name, final double expectedValue, boolean total, boolean rate, boolean avg, boolean max,
-            BiFunction<String, String, String> forensics) throws InterruptedException {
-        waitForTotalAndRateMetrics(name, expectedValue, total, rate, forensics);
-        waitForAvgAndMaxMetrics(name, expectedValue, avg, max, forensics);
-    }
-
-    public void waitForTotalAndRateMetrics(String name, final double expectedValue, boolean total, boolean rate,
-            BiFunction<String, String, String> forensics) throws InterruptedException {
-        final String totalName = name + "-total";
-        final String rateName = name + "-rate";
-        try {
-            if (expectedValue == 0.0) {
-                if (total)
-                    assertEquals(expectedValue, metricValue(totalName), EPS);
-                if (rate)
-                    assertEquals(expectedValue, metricValue(rateName), EPS);
-            } else {
-                if (total)
-                    TestUtils.waitForCondition(() -> Math.abs(metricValue(totalName) - expectedValue) <= EPS,
-                            "Metric not updated " + totalName);
-                if (rate)
-                    TestUtils.waitForCondition(() -> metricValue(rateName) > 0.0, "Metric not updated " + rateName);
-            }
-        } catch (AssertionError e) {
-            if (forensics == null)
-                throw e;
-            String forensicText = e.getMessage() + ": "
-                    + forensics.apply(total ? totalName : null, rate ? rateName : null);
-            throw new AssertionError(forensicText, e);
-        }
-    }
-
-    public void waitForAvgAndMaxMetrics(String name, final double expectedValue, boolean avg, boolean max,
-            BiFunction<String, String, String> forensics) throws InterruptedException {
-        final String avgName = name + "-avg";
-        final String maxName = name + "-max";
-        try {
-            if (expectedValue == 0.0) {
-                if (avg)
-                    assertEquals(expectedValue, metricValue(avgName), EPS);
-                if (max)
-                    assertEquals(Double.NEGATIVE_INFINITY, metricValue(maxName), EPS);
-            } else {
-                if (avg)
-                    TestUtils.waitForCondition(() -> metricValue(avgName) > 0.0, "Metric not updated " + avgName);
-                if (max)
-                    TestUtils.waitForCondition(() -> metricValue(maxName) > 0.0, "Metric not updated " + maxName);
-            }
-        } catch (AssertionError e) {
-            if (forensics == null)
-                throw e;
-            String forensicText = e.getMessage() + ": "
-                    + forensics.apply(avg ? avgName : null, max ? maxName : null);
-            throw new AssertionError(forensicText, e);
+        long maxAggregateWaitMs = 15000;
+        long startMs = time.milliseconds();
+        for (MetricType metricType : metricTypes) {
+            long currentElapsedMs = time.milliseconds() - startMs;
+            long thisMaxWaitMs = maxAggregateWaitMs - currentElapsedMs;
+            String metricName = namePrefix + metricType.metricNameSuffix();
+            if (expectedValue == 0.0)
+                assertEquals(metricType == MetricType.MAX ? Double.NEGATIVE_INFINITY : 0d, metricValue(metricName),
+                        EPS);
+            else if (metricType == MetricType.TOTAL)
+                TestUtils.waitForCondition(() -> Math.abs(metricValue(metricName) - expectedValue) <= EPS,
+                        thisMaxWaitMs, () -> "Metric not updated " + metricName + " expected:<" + expectedValue
+                                + "> but was:<" + metricValue(metricName) + ">");
+            else
+                TestUtils.waitForCondition(() -> metricValue(metricName) > 0.0, thisMaxWaitMs,
+                    () -> "Metric not updated " + metricName + " expected:<a positive number> but was:<"
+                                + metricValue(metricName) + ">");
         }
     }
 
@@ -254,7 +251,7 @@ public class NioEchoServer extends Thread {
                 List<NetworkReceive> completedReceives = selector.completedReceives();
                 for (NetworkReceive rcv : completedReceives) {
                     KafkaChannel channel = channel(rcv.source());
-                    if (!TestUtils.maybeBeginServerReauthentication(channel, rcv, time)) {
+                    if (!maybeBeginServerReauthentication(channel, rcv, time)) {
                         String channelId = channel.id();
                         selector.mute(channelId);
                         NetworkSend send = new NetworkSend(rcv.source(), rcv.payload());
@@ -281,6 +278,17 @@ public class NioEchoServer extends Thread {
         return numSent;
     }
 
+    private static boolean maybeBeginServerReauthentication(KafkaChannel channel, NetworkReceive networkReceive, Time time) {
+        try {
+            if (TestUtils.apiKeyFrom(networkReceive) == ApiKeys.SASL_HANDSHAKE) {
+                return channel.maybeBeginServerReauthentication(networkReceive, () -> time.nanoseconds());
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+        return false;
+    }
+
     private String id(SocketChannel channel) {
         return channel.socket().getLocalAddress().getHostAddress() + ":" + channel.socket().getLocalPort() + "-" +
                 channel.socket().getInetAddress().getHostAddress() + ":" + channel.socket().getPort();
@@ -289,13 +297,6 @@ public class NioEchoServer extends Thread {
     private KafkaChannel channel(String id) {
         KafkaChannel channel = selector.channel(id);
         return channel == null ? selector.closingChannel(id) : channel;
-    }
-
-    private BiFunction<String, String, String> metricForensics() {
-        return (metric1, metric2) -> {
-            return String.format("Failed: %s=%s, %s=%s", metric1, metric1 == null ? "N/A" : metricValue(metric1),
-                    metric2, metric2 == null ? "N/A" : metricValue(metric2));
-        };
     }
 
     /**

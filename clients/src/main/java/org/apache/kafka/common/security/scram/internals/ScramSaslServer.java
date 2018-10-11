@@ -33,7 +33,7 @@ import javax.security.sasl.SaslServerFactory;
 import org.apache.kafka.common.errors.AuthenticationException;
 import org.apache.kafka.common.errors.IllegalSaslStateException;
 import org.apache.kafka.common.errors.SaslAuthenticationException;
-import org.apache.kafka.common.security.authenticator.SaslUtils;
+import org.apache.kafka.common.security.authenticator.SaslInternalConfigs;
 import org.apache.kafka.common.security.scram.ScramCredential;
 import org.apache.kafka.common.security.scram.ScramCredentialCallback;
 import org.apache.kafka.common.security.scram.ScramLoginModule;
@@ -185,7 +185,7 @@ public class ScramSaslServer implements SaslServer {
     public Object getNegotiatedProperty(String propName) {
         if (!isComplete())
             throw new IllegalStateException("Authentication exchange has not completed");
-        if (SaslUtils.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY.equals(propName))
+        if (SaslInternalConfigs.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY.equals(propName))
             return tokenExpiryTimestamp; // will be null if token not used
         if (SUPPORTED_EXTENSIONS.contains(propName))
             return scramExtensions.map().get(propName);

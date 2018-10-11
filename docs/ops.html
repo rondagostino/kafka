@@ -969,9 +969,14 @@
         <td>between 0 and 1, ideally &gt 0.3</td>
       </tr>
       <tr>
-        <td>The number of connections disconnected due to a client not re-authenticating and then using the connection beyond its expiration time for anything other than re-authentication</td>
+        <td>The number of connections disconnected on a processor due to a client not re-authenticating and then using the connection beyond its expiration time for anything other than re-authentication</td>
+        <td>kafka.server:type=socket-server-metrics,listener=[SASL_PLAINTEXT|SASL_SSL],networkProcessor=&lt;#&gt;,name=expired-connections-killed-count</td>
+        <td>ideally 0 when re-authentication is enabled, implying there are no longer any older, pre-2.2.0 clients connecting to this (listener, processor) combination</td>
+      </tr>
+      <tr>
+        <td>The total number of connections disconnected, across all processors, due to a client not re-authenticating and then using the connection beyond its expiration time for anything other than re-authentication</td>
         <td>kafka.network:type=SocketServer,name=ExpiredConnectionsKilledCount</td>
-        <td>ideally 0 when re-authentication is enabled, implying there are no longer any older, pre-2.2.0 clients connecting</td>
+        <td>ideally 0 when re-authentication is enabled, implying there are no longer any older, pre-2.2.0 clients connecting to this broker</td>
       </tr>
       <tr>
         <td>The average fraction of time the request handler threads are idle</td>
@@ -1189,7 +1194,7 @@
       </tr>
       <tr>
         <td>successful-authentication-no-reauth-total</td>
-        <td>Total connections that were successfully authenticated by older, pre-2.2.0 SASL clients that do not support re-authentication.</td>
+        <td>Total connections that were successfully authenticated by older, pre-2.2.0 SASL clients that do not support re-authentication.  May only be non-zero </td>
         <td>kafka.[producer|consumer|connect]:type=[producer|consumer|connect]-metrics,client-id=([-.\w]+)</td>
       </tr>
     </tbody>

@@ -120,6 +120,19 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
         def value = memoryPool.size() - memoryPool.availableMemory()
       }
     )
+    newGauge("ExpiredConnectionsKilledCount",
+      new Gauge[Double] {
+
+        def value = SocketServer.this.synchronized {
+          val expiredConnectionsKilledCountMetricNames = processors.values.asScala.map { p =>
+            metrics.metricName("expired-connections-killed-count", "socket-server-metrics", p.metricTags)
+          }
+          expiredConnectionsKilledCountMetricNames.map { metricName =>
+            Option(metrics.metric(metricName)).fold(0.0)(m => m.metricValue.asInstanceOf[Double])
+          }.sum
+        }
+      }
+    )
     info("Started " + acceptors.size + " acceptor threads")
   }
 
@@ -553,7 +566,7 @@ private[kafka] class Processor(val id: Int,
   )
   
   val expiredConnectionsKilledCount = new Total()
-  private val expiredConnectionsKilledCountMetricName = metrics.metricName("ExpiredConnectionsKilledCount", "socket-server-metrics", metricTags)
+  private val expiredConnectionsKilledCountMetricName = metrics.metricName("expired-connections-killed-count", "socket-server-metrics", metricTags)
   metrics.addMetric(expiredConnectionsKilledCountMetricName, expiredConnectionsKilledCount)
 
   private val selector = createSelector(

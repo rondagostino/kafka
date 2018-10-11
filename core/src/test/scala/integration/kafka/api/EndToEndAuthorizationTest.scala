@@ -17,6 +17,9 @@
 
 package kafka.api
 
+import com.yammer.metrics.Metrics
+import com.yammer.metrics.core.{Gauge, Metric, MetricName}
+
 import java.io.File
 import java.util.ArrayList
 import java.util.concurrent.ExecutionException
@@ -209,15 +212,25 @@ abstract class EndToEndAuthorizationTest extends IntegrationTestHarness with Sas
   }
 
   protected def confirmReauthenticationMetrics() : Unit = {
+    val expiredConnectionsKilledCountTotal = getGauge("ExpiredConnectionsKilledCount").value()
     servers.foreach { s =>
-        val numExpiredKilled = TestUtils.totalMetricValue(s, "ExpiredConnectionsKilledCount")
-        assertTrue("Should have been zero expired connections killed: " + numExpiredKilled, numExpiredKilled == 0)
+        val numExpiredKilled = TestUtils.totalMetricValue(s, "expired-connections-killed-count")
+        assertTrue("Should have been zero expired connections killed: " + numExpiredKilled + "(total=" + expiredConnectionsKilledCountTotal + ")", numExpiredKilled == 0)
     }
+    assertEquals("Should have been zero expired connections killed total", 0, expiredConnectionsKilledCountTotal, 0.0)
     servers.foreach { s =>
       assertTrue("failed re-authentications not 0", TestUtils.totalMetricValue(s, "failed-reauthentication-total") == 0)
     }
   }
   
+  private def getGauge(metricName: String) = {
+    Metrics.defaultRegistry.allMetrics.asScala
+           .filterKeys(k => k.getName == metricName)
+           .headOption
+           .getOrElse { fail( "Unable to find metric " + metricName ) }
+           ._2.asInstanceOf[Gauge[Double]]
+  }
+
   @Test
   def testProduceConsumeViaSubscribe(): Unit = {
     setAclsAndProduce(tp)

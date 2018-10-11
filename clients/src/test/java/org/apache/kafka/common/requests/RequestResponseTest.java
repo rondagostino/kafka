@@ -167,10 +167,10 @@ public class RequestResponseTest {
         checkRequest(createSaslHandshakeRequest());
         checkErrorResponse(createSaslHandshakeRequest(), new UnknownServerException());
         checkResponse(createSaslHandshakeResponse(), 0);
-        checkRequest(createSaslAuthenticateRequest(), true);
+        checkRequest(createSaslAuthenticateRequest());
         checkErrorResponse(createSaslAuthenticateRequest(), new UnknownServerException());
-        checkResponse(createSaslAuthenticateResponse(), 0, true);
-        checkResponse(createSaslAuthenticateResponse(), 1, true);
+        checkResponse(createSaslAuthenticateResponse(), 0);
+        checkResponse(createSaslAuthenticateResponse(), 1);
         checkRequest(createApiVersionRequest());
         checkErrorResponse(createApiVersionRequest(), new UnknownServerException());
         checkResponse(createApiVersionResponse(), 0);
@@ -367,19 +367,9 @@ public class RequestResponseTest {
     private void checkResponse(AbstractResponse response, int version) throws Exception {
         // Check that we can serialize, deserialize and serialize again
         // We don't check for equality or hashCode because it is likely to fail for any response containing a HashMap
-        checkResponse(response, version, false);
-    }
-
-    private void checkResponse(AbstractResponse response, int version, boolean checkEqualityAndHashCode) throws Exception {
-        // Check that we can serialize, deserialize and serialize again
-        // Check for equality and hashCode only if indicated
         Struct struct = response.toStruct((short) version);
         AbstractResponse deserialized = (AbstractResponse) deserialize(response, struct, (short) version);
         Struct struct2 = deserialized.toStruct((short) version);
-        if (checkEqualityAndHashCode) {
-            assertEquals(struct, struct2);
-            assertEquals(struct.hashCode(), struct2.hashCode());
-        }
     }
 
     private AbstractRequestResponse deserialize(AbstractRequestResponse req, Struct struct, short version) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {

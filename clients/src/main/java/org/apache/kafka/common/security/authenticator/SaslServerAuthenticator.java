@@ -425,6 +425,11 @@ public class SaslServerAuthenticator implements Authenticator {
                 // This should not normally occur since clients typically check supported versions using ApiVersionsRequest
                 throw new UnsupportedVersionException("Version " + version + " is not supported for apiKey " + apiKey);
             }
+            /*
+             * The client sends multiple SASL_AUTHENTICATE requests, and the client is known
+             * to support the required version if any one of them indicates it supports that
+             * version.
+             */
             if (!reauthInfo.connectedClientSupportsReauthentication)
                 reauthInfo.connectedClientSupportsReauthentication = version > 0;
             SaslAuthenticateRequest saslAuthenticateRequest = (SaslAuthenticateRequest) requestAndSize.request;

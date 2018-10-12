@@ -112,6 +112,7 @@ public class SaslServerAuthenticator implements Authenticator {
     private final Map<String, AuthenticateCallbackHandler> callbackHandlers;
     private final Map<String, Long> connectionsMaxReauthMsByMechanism;
     private final Time time;
+    private final ReauthInfo reauthInfo;
 
     // Current SASL state
     private SaslState saslState = SaslState.INITIAL_REQUEST;
@@ -128,7 +129,6 @@ public class SaslServerAuthenticator implements Authenticator {
     private Send authenticationFailureSend = null;
     // flag indicating if sasl tokens are sent as Kafka SaslAuthenticate request/responses
     private boolean enableKafkaSaslAuthenticateHeaders;
-    private final ReauthInfo reauthInfo;
 
     public SaslServerAuthenticator(Map<String, ?> configs,
                                    Map<String, AuthenticateCallbackHandler> callbackHandlers,
@@ -149,6 +149,7 @@ public class SaslServerAuthenticator implements Authenticator {
         this.transportLayer = transportLayer;
         this.connectionsMaxReauthMsByMechanism = connectionsMaxReauthMsByMechanism;
         this.time = time;
+        this.reauthInfo = new ReauthInfo();
 
         this.configs = configs;
         @SuppressWarnings("unchecked")
@@ -168,7 +169,6 @@ public class SaslServerAuthenticator implements Authenticator {
         // Note that the old principal builder does not support SASL, so we do not need to pass the
         // authenticator or the transport layer
         this.principalBuilder = ChannelBuilders.createPrincipalBuilder(configs, null, null, kerberosNameParser);
-        this.reauthInfo = new ReauthInfo();
     }
 
     private void createSaslServer(String mechanism) throws IOException {
@@ -558,11 +558,21 @@ public class SaslServerAuthenticator implements Authenticator {
                     }
                     LOG.debug("Received client packet of length {} starting with bytes 0x{}, process as GSSAPI packet", requestBytes.length, tokenBuilder);
                 }
-                if (enabledMechanisms.contains(SaslConfigs.GSSAPI_MECHANISM)) {
+                /*
+                 * Perform explicit check here to make sure mechanism doesn't change during
+                 * re-authentication because we don't have a request context required for the
+                 * check below
+                 */
+                if (enabledMechanisms.contains(SaslConfigs.GSSAPI_MECHANISM) && (!reauthInfo.reauthenticating()
+                        || reauthInfo.previousSaslMechanism.equals(SaslConfigs.GSSAPI_MECHANISM))) {
                     LOG.debug("First client packet is not a SASL mechanism request, using default mechanism GSSAPI");
                     clientMechanism = SaslConfigs.GSSAPI_MECHANISM;
                 } else
-                    throw new UnsupportedSaslMechanismException("Exception handling first SASL packet from client, GSSAPI is not supported by server", e);
+                    throw new UnsupportedSaslMechanismException(
+                            "Exception handling first SASL packet from client during "
+                                    + reauthInfo.authenticationOrReauthenticationText()
+                                    + ", GSSAPI is not supported by server",
+                            e);
             } else
                 throw e;
         }

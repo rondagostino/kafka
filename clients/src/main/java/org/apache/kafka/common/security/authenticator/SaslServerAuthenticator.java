@@ -344,10 +344,7 @@ public class SaslServerAuthenticator implements Authenticator {
 
     @Override
     public Long reauthenticationLatencyMs() {
-        return reauthInfo.reauthenticating()
-                ? Long.valueOf(
-                        (reauthInfo.authenticationEndNanos - reauthInfo.reauthenticationBeginNanos) / 1000 / 1000)
-                : null;
+        return reauthInfo.reauthenticationLatencyMs();
     }
 
     @Override
@@ -440,7 +437,8 @@ public class SaslServerAuthenticator implements Authenticator {
                     reauthInfo.ensurePrincipalUnchanged(principal());
                 // For versions with SASL_AUTHENTICATE header, send a response to SASL_AUTHENTICATE request even if token is empty.
                 ByteBuffer responseBuf = responseToken == null ? EMPTY_BUFFER : ByteBuffer.wrap(responseToken);
-                long sessionLifetimeMs = !saslServer.isComplete() ? 0L : calcCompletionTimesMs();
+                long sessionLifetimeMs = !saslServer.isComplete() ? 0L
+                        : reauthInfo.calcCompletionTimesAndReturnSessionLifetimeMs();
                 sendKafkaResponse(requestContext, new SaslAuthenticateResponse(Errors.NONE, null, responseBuf, sessionLifetimeMs));
             } catch (SaslAuthenticationException e) {
                 buildResponseOnAuthenticateFailure(requestContext,
@@ -464,56 +462,6 @@ public class SaslServerAuthenticator implements Authenticator {
         }
     }
 
-    private long calcCompletionTimesMs() {
-        long retvalSessionLifetimeMs = 0L;
-        long authenticationEndMs = time.milliseconds();
-        reauthInfo.authenticationEndNanos = time.nanoseconds();
-        Long credentialExpirationMs = (Long) saslServer
-                .getNegotiatedProperty(SaslInternalConfigs.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
-        Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
-        if (credentialExpirationMs != null || connectionsMaxReauthMs != null) {
-            if (credentialExpirationMs == null)
-                retvalSessionLifetimeMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
-            else if (connectionsMaxReauthMs == null)
-                retvalSessionLifetimeMs = zeroIfNegative(credentialExpirationMs.longValue() - authenticationEndMs);
-            else
-                retvalSessionLifetimeMs = zeroIfNegative(Math.min(
-                        credentialExpirationMs.longValue() - authenticationEndMs, connectionsMaxReauthMs.longValue()));
-            if (retvalSessionLifetimeMs > 0L)
-                reauthInfo.sessionExpirationTimeNanos = Long
-                        .valueOf(reauthInfo.authenticationEndNanos + 1000 * 1000 * retvalSessionLifetimeMs);
-        }
-        if (credentialExpirationMs != null) {
-            if (reauthInfo.sessionExpirationTimeNanos != null)
-                LOG.debug(
-                        "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); session expiration = {} ({} ms), sending {} ms to client",
-                        connectionsMaxReauthMs, new Date(credentialExpirationMs),
-                        Long.valueOf(credentialExpirationMs.longValue() - authenticationEndMs),
-                        new Date(authenticationEndMs + retvalSessionLifetimeMs), retvalSessionLifetimeMs,
-                        retvalSessionLifetimeMs);
-            else
-                LOG.debug(
-                        "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); no session expiration, sending 0 ms to client",
-                        connectionsMaxReauthMs, new Date(credentialExpirationMs),
-                        Long.valueOf(credentialExpirationMs.longValue() - authenticationEndMs));
-        } else {
-            if (reauthInfo.sessionExpirationTimeNanos != null)
-                LOG.debug(
-                        "Authentication complete; session max lifetime from broker config={} ms, no credential expiration; session expiration = {} ({} ms), sending {} ms to client",
-                        connectionsMaxReauthMs, new Date(authenticationEndMs + retvalSessionLifetimeMs),
-                        retvalSessionLifetimeMs, retvalSessionLifetimeMs);
-            else
-                LOG.debug(
-                        "Authentication complete; session max lifetime from broker config={} ms, no credential expiration; no session expiration, sending 0 ms to client",
-                        connectionsMaxReauthMs);
-        }
-        return retvalSessionLifetimeMs;
-    }
-
-    private static long zeroIfNegative(long value) {
-        return Math.max(0L, value);
-    }
-    
     private boolean handleKafkaRequest(byte[] requestBytes) throws IOException, AuthenticationException {
         boolean isKafkaRequest = false;
         String clientMechanism = null;
@@ -696,5 +644,63 @@ public class SaslServerAuthenticator implements Authenticator {
                 throw new UnsupportedSaslMechanismException("Unsupported SASL mechanism " + clientMechanism);
             }
         }
+
+        private long calcCompletionTimesAndReturnSessionLifetimeMs() {
+            long retvalSessionLifetimeMs = 0L;
+            long authenticationEndMs = time.milliseconds();
+            authenticationEndNanos = time.nanoseconds();
+            Long credentialExpirationMs = (Long) saslServer
+                    .getNegotiatedProperty(SaslInternalConfigs.CREDENTIAL_LIFETIME_MS_SASL_NEGOTIATED_PROPERTY_KEY);
+            Long connectionsMaxReauthMs = connectionsMaxReauthMsByMechanism.get(saslMechanism);
+            if (credentialExpirationMs != null || connectionsMaxReauthMs != null) {
+                if (credentialExpirationMs == null)
+                    retvalSessionLifetimeMs = zeroIfNegative(connectionsMaxReauthMs.longValue());
+                else if (connectionsMaxReauthMs == null)
+                    retvalSessionLifetimeMs = zeroIfNegative(credentialExpirationMs.longValue() - authenticationEndMs);
+                else
+                    retvalSessionLifetimeMs = zeroIfNegative(
+                            Math.min(credentialExpirationMs.longValue() - authenticationEndMs,
+                                    connectionsMaxReauthMs.longValue()));
+                if (retvalSessionLifetimeMs > 0L)
+                    sessionExpirationTimeNanos = Long
+                            .valueOf(authenticationEndNanos + 1000 * 1000 * retvalSessionLifetimeMs);
+            }
+            if (credentialExpirationMs != null) {
+                if (sessionExpirationTimeNanos != null)
+                    LOG.debug(
+                            "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); session expiration = {} ({} ms), sending {} ms to client",
+                            connectionsMaxReauthMs, new Date(credentialExpirationMs),
+                            Long.valueOf(credentialExpirationMs.longValue() - authenticationEndMs),
+                            new Date(authenticationEndMs + retvalSessionLifetimeMs), retvalSessionLifetimeMs,
+                            retvalSessionLifetimeMs);
+                else
+                    LOG.debug(
+                            "Authentication complete; session max lifetime from broker config={} ms, credential expiration={} ({} ms); no session expiration, sending 0 ms to client",
+                            connectionsMaxReauthMs, new Date(credentialExpirationMs),
+                            Long.valueOf(credentialExpirationMs.longValue() - authenticationEndMs));
+            } else {
+                if (sessionExpirationTimeNanos != null)
+                    LOG.debug(
+                            "Authentication complete; session max lifetime from broker config={} ms, no credential expiration; session expiration = {} ({} ms), sending {} ms to client",
+                            connectionsMaxReauthMs, new Date(authenticationEndMs + retvalSessionLifetimeMs),
+                            retvalSessionLifetimeMs, retvalSessionLifetimeMs);
+                else
+                    LOG.debug(
+                            "Authentication complete; session max lifetime from broker config={} ms, no credential expiration; no session expiration, sending 0 ms to client",
+                            connectionsMaxReauthMs);
+            }
+            return retvalSessionLifetimeMs;
+        }
+
+        public Long reauthenticationLatencyMs() {
+            return reauthenticating()
+                    ? Long.valueOf(
+                            (authenticationEndNanos - reauthenticationBeginNanos) / 1000 / 1000)
+                    : null;
+        }
+
+        private long zeroIfNegative(long value) {
+            return Math.max(0L, value);
+        }        
     }
 }

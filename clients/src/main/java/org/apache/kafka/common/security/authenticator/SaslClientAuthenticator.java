@@ -116,8 +116,7 @@ public class SaslClientAuthenticator implements Authenticator {
     private RequestHeader currentRequestHeader;
     // Version of SaslAuthenticate request/responses
     private short saslAuthenticateVersion;
-    private final AuthInfoForReauth authInfoForReauth;
-    private ReauthInfo reauthInfo;
+    private final ReauthInfo reauthInfo;
 
     public SaslClientAuthenticator(Map<String, ?> configs,
                                    AuthenticateCallbackHandler callbackHandler,
@@ -156,7 +155,7 @@ public class SaslClientAuthenticator implements Authenticator {
             throw new SaslAuthenticationException("Failed to configure SaslClientAuthenticator", e);
         }
         this.time = time;
-        this.authInfoForReauth = new AuthInfoForReauth();
+        this.reauthInfo = new ReauthInfo();
     }
 
     private SaslClient createSaslClient() {
@@ -196,12 +195,12 @@ public class SaslClientAuthenticator implements Authenticator {
                     break;
                 else {
                     saslAuthenticateVersion(apiVersionsResponse);
-                    authInfoForReauth.apiVersionsResponseReceivedFromBroker = apiVersionsResponse;
+                    reauthInfo.apiVersionsResponseReceivedFromBroker = apiVersionsResponse;
                     setSaslState(SaslState.SEND_HANDSHAKE_REQUEST);
                     // Fall through to send handshake request with the latest supported version
                 }
             case SEND_HANDSHAKE_REQUEST:
-                sendHandshakeRequest(authInfoForReauth.apiVersionsResponseReceivedFromBroker);
+                sendHandshakeRequest(reauthInfo.apiVersionsResponseReceivedFromBroker);
                 setSaslState(SaslState.RECEIVE_HANDSHAKE_RESPONSE);
                 break;
             case RECEIVE_HANDSHAKE_RESPONSE:
@@ -280,11 +279,10 @@ public class SaslClientAuthenticator implements Authenticator {
     public void reauthenticate(ReauthenticationContext reauthenticationContext) throws IOException {
         SaslClientAuthenticator previousSaslClientAuthenticator = (SaslClientAuthenticator) Objects
                 .requireNonNull(reauthenticationContext).previousAuthenticator();
-        ApiVersionsResponse apiVersionsResponseFromOriginalAuthentication = previousSaslClientAuthenticator.reauthInfo != null
-                ? previousSaslClientAuthenticator.reauthInfo.apiVersionsResponseFromOriginalAuthentication
-                : previousSaslClientAuthenticator.authInfoForReauth.apiVersionsResponseReceivedFromBroker;
+        ApiVersionsResponse apiVersionsResponseFromOriginalAuthentication = previousSaslClientAuthenticator.reauthInfo
+                .apiVersionsResponse();
         previousSaslClientAuthenticator.close();
-        reauthInfo = new ReauthInfo(apiVersionsResponseFromOriginalAuthentication,
+        reauthInfo.reauthenticating(apiVersionsResponseFromOriginalAuthentication,
                 reauthenticationContext.reauthenticationBeginNanos());
         NetworkReceive netInBufferFromChannel = reauthenticationContext.networkReceive();
         netInBuffer = netInBufferFromChannel;
@@ -300,13 +298,14 @@ public class SaslClientAuthenticator implements Authenticator {
 
     @Override
     public Long clientSessionReauthenticationTimeNanos() {
-        return authInfoForReauth.clientSessionReauthenticationTimeNanos;
+        return reauthInfo.clientSessionReauthenticationTimeNanos;
     }
 
     @Override
     public Long reauthenticationLatencyMs() {
-        return reauthInfo != null ? Long.valueOf(Math.round(
-                (authInfoForReauth.authenticationEndNanos - reauthInfo.reauthenticationBeginNanos) / 1000.0 / 1000.0))
+        return reauthInfo.reauthenticating()
+                ? Long.valueOf(Math.round(
+                        (reauthInfo.authenticationEndNanos - reauthInfo.reauthenticationBeginNanos) / 1000.0 / 1000.0))
                 : null;
     }
 
@@ -351,27 +350,23 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     private void setAuthenticationEndAndSessionReauthenticationTimes() {
-        authInfoForReauth.authenticationEndNanos = time.nanoseconds();
+        reauthInfo.authenticationEndNanos = time.nanoseconds();
         long sessionLifetimeMsToUse = 0;
-        if (authInfoForReauth.positiveSessionLifetimeMs != null) {
+        if (reauthInfo.positiveSessionLifetimeMs != null) {
             // pick a random percentage between 85% and 95% for session re-authentication
             double pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount = 0.85;
             double pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously = 0.10;
             double pctToUse = pctWindowFactorToTakeNetworkLatencyAndClockDriftIntoAccount
                     + RNG.nextDouble() * pctWindowJitterToAvoidReauthenticationStormAcrossManyChannelsSimultaneously;
-            sessionLifetimeMsToUse = (long) (authInfoForReauth.positiveSessionLifetimeMs.longValue() * pctToUse);
-            authInfoForReauth.clientSessionReauthenticationTimeNanos = authInfoForReauth.authenticationEndNanos
+            sessionLifetimeMsToUse = (long) (reauthInfo.positiveSessionLifetimeMs.longValue() * pctToUse);
+            reauthInfo.clientSessionReauthenticationTimeNanos = reauthInfo.authenticationEndNanos
                     + 1000 * 1000 * sessionLifetimeMsToUse;
             LOG.debug("Finished {} with session expiration in {} ms and session re-authentication on or after {} ms",
-                    authenticationOrReauthenticationText(), authInfoForReauth.positiveSessionLifetimeMs,
+                    reauthInfo.authenticationOrReauthenticationText(), reauthInfo.positiveSessionLifetimeMs,
                     sessionLifetimeMsToUse);
         } else
             LOG.debug("Finished {} with no session expiration and no session re-authentication",
-                    authenticationOrReauthenticationText());
-    }
-
-    private String authenticationOrReauthenticationText() {
-        return reauthInfo != null ? "re-authentication" : "authentication";
+                    reauthInfo.authenticationOrReauthenticationText());
     }
 
     /**
@@ -456,7 +451,7 @@ public class SaslClientAuthenticator implements Authenticator {
                 }
                 long sessionLifetimeMs = response.sessionLifetimeMs();
                 if (sessionLifetimeMs > 0L)
-                    authInfoForReauth.positiveSessionLifetimeMs = sessionLifetimeMs;
+                    reauthInfo.positiveSessionLifetimeMs = sessionLifetimeMs;
                 return Utils.readBytes(response.saslAuthBytes());
             } else
                 return null;
@@ -520,7 +515,7 @@ public class SaslClientAuthenticator implements Authenticator {
              * Account for the fact that during re-authentication there may be responses
              * arriving for requests that were sent in the past.
              */
-            if (reauthInfo != null) {
+            if (reauthInfo.reauthenticating()) {
                 /*
                  * It didn't match the current request header, so it must be unrelated to
                  * re-authentication. Save it so it can be processed later.
@@ -571,23 +566,36 @@ public class SaslClientAuthenticator implements Authenticator {
         }
     }
 
-    private static class AuthInfoForReauth {
+    /**
+     * Information related to re-authentication
+     */
+    private static class ReauthInfo {
+        public ApiVersionsResponse apiVersionsResponseFromOriginalAuthentication;
+        public long reauthenticationBeginNanos;
+        public List<NetworkReceive> pendingAuthenticatedReceives = new ArrayList<>();
         public ApiVersionsResponse apiVersionsResponseReceivedFromBroker;
         public Long positiveSessionLifetimeMs;
         public long authenticationEndNanos;
         public Long clientSessionReauthenticationTimeNanos;
-    }
 
-    private static class ReauthInfo {
-        public final ApiVersionsResponse apiVersionsResponseFromOriginalAuthentication;
-        public final long reauthenticationBeginNanos;
-        public List<NetworkReceive> pendingAuthenticatedReceives = new ArrayList<>();
-
-        public ReauthInfo(ApiVersionsResponse apiVersionsResponseFromOriginalAuthentication,
+        public void reauthenticating(ApiVersionsResponse apiVersionsResponseFromOriginalAuthentication,
                 long reauthenticationBeginNanos) {
             this.apiVersionsResponseFromOriginalAuthentication = Objects
                     .requireNonNull(apiVersionsResponseFromOriginalAuthentication);
             this.reauthenticationBeginNanos = reauthenticationBeginNanos;
+        }
+
+        public String authenticationOrReauthenticationText() {
+            return reauthenticating() ? "re-authentication" : "authentication";
+        }
+
+        public boolean reauthenticating() {
+            return apiVersionsResponseFromOriginalAuthentication != null;
+        }
+        
+        public ApiVersionsResponse apiVersionsResponse() {
+            return reauthenticating() ? apiVersionsResponseFromOriginalAuthentication
+                    : apiVersionsResponseReceivedFromBroker;
         }
 
         /**

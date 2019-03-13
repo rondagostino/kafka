@@ -208,7 +208,7 @@ import org.slf4j.LoggerFactory;
  * {@link AuthenticateCallbackHandler} that can handle an instance of
  * {@link OAuthBearerValidatorCallback} and declaring it via the
  * {@code listener.name.sasl_ssl.oauthbearer.sasl.server.callback.handler.class}
- * broker configuration option.
+ * broker configuration option. Such implementations must be thread-safe.
  * <p>
  * The builtin {@code SaslServer} implementation for SASL/OAUTHBEARER in Kafka
  * makes the instance of {@link OAuthBearerToken} available upon successful

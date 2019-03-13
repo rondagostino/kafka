@@ -23,8 +23,15 @@ import java.util.Map;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.login.AppConfigurationEntry;
 
-/*
- * Callback handler for SASL-based authentication
+/**
+ * Callback handler for SASL-based authentication. Implementations that are
+ * plugged in as a SASL Server Callback Handler via the
+ * {@code listener.name.<securityProtocol>.<saslMechanism>.sasl.server.callback.handler.class}
+ * configuration property (see <a href=
+ * "https://cwiki.apache.org/confluence/display/KAFKA/KIP-86%3A+Configurable+SASL+callback+handlers">KIP-86:
+ * Configurable SASL callback handlers </a>) must be thread safe. There is no
+ * such requirement for implementations used as client-related callback handlers
+ * (whether non-broker clients or brokers as inter-broker clients).
  */
 public interface AuthenticateCallbackHandler extends CallbackHandler {
 

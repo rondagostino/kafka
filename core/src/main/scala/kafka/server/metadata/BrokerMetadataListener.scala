@@ -222,9 +222,19 @@ class BrokerMetadataListener(brokerId: Int,
 
   def handleRemoveTopicRecord(imageBuilder: MetadataImageBuilder,
                               record: RemoveTopicRecord): Unit = {
-    val removedPartitions = imageBuilder.partitionsBuilder().
-      removeTopicById(record.topicId())
-    groupCoordinator.handleDeletedPartitions(removedPartitions.map(_.toTopicPartition).toSeq)
+    imageBuilder.topicIdToName(record.topicId()) match {
+      case None => throw new RuntimeException(s"Unable to locate topic with ID ${record.topicId}")
+      case Some(topicName) =>
+        val removedPartitions = imageBuilder.partitionsBuilder().
+          removeTopicById(record.topicId())
+        groupCoordinator.handleDeletedPartitions(removedPartitions.map(_.toTopicPartition).toSeq)
+        val configResource = new ConfigResource(ConfigResource.Type.TOPIC, topicName)
+        val topicProps = configRepository.config(configResource)
+        topicProps.stringPropertyNames().forEach { key =>
+          logger.info(s"RTD deleting topic config $key for topic $topicName")
+          configRepository.setConfig(configResource, key, null)
+        }
+    }
   }
 
   def handleQuotaRecord(imageBuilder: MetadataImageBuilder,

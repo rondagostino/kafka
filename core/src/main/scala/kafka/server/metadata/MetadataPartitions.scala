@@ -125,7 +125,10 @@ class MetadataPartitionsBuilder(val brokerId: Int,
   def removeTopicById(id: Uuid): Iterable[MetadataPartition] = {
     Option(newIdMap.remove(id)) match {
       case None => throw new RuntimeException(s"Unable to locate topic with ID $id")
-      case Some(name) => newNameMap.remove(name).values().asScala
+      case Some(name) =>
+        val removed = newNameMap.remove(name).values().asScala
+        removed.filter(_.isReplicaFor(brokerId)).foreach(_localRemoved.add(_))
+        removed
     }
   }
 

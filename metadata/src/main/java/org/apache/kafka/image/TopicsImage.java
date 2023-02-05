@@ -23,12 +23,14 @@ import org.apache.kafka.image.writer.ImageWriter;
 import org.apache.kafka.image.writer.ImageWriterOptions;
 import org.apache.kafka.metadata.PartitionRegistration;
 import org.apache.kafka.server.util.TranslatedValueMapView;
+import org.organicdesign.fp.collections.ImMap;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
+
+import static org.organicdesign.fp.StaticImports.map;
 
 
 /**
@@ -38,15 +40,21 @@ import java.util.stream.Collectors;
  */
 public final class TopicsImage {
     public static final TopicsImage EMPTY =
-        new TopicsImage(Collections.emptyMap(), Collections.emptyMap());
+        new TopicsImage(map(), map());
 
-    private final Map<Uuid, TopicImage> topicsById;
-    private final Map<String, TopicImage> topicsByName;
+    final ImMap<Uuid, TopicImage> topicsById;
+    final ImMap<String, TopicImage> topicsByName;
 
-    public TopicsImage(Map<Uuid, TopicImage> topicsById,
-                       Map<String, TopicImage> topicsByName) {
-        this.topicsById = Collections.unmodifiableMap(topicsById);
-        this.topicsByName = Collections.unmodifiableMap(topicsByName);
+    public TopicsImage(ImMap<Uuid, TopicImage> topicsById,
+                       ImMap<String, TopicImage> topicsByName) {
+        this.topicsById = topicsById;
+        this.topicsByName = topicsByName;
+    }
+
+    public TopicsImage including(TopicImage topic) {
+        return new TopicsImage(
+            this.topicsById.assoc(topic.id(), topic),
+            this.topicsByName.assoc(topic.name(), topic));
     }
 
     public boolean isEmpty() {
@@ -76,8 +84,8 @@ public final class TopicsImage {
     }
 
     public void write(ImageWriter writer, ImageWriterOptions options) {
-        for (TopicImage topicImage : topicsById.values()) {
-            topicImage.write(writer, options);
+        for (Map.Entry<Uuid, TopicImage> entry : topicsById.entrySet()) {
+            entry.getValue().write(writer, options);
         }
     }
 
@@ -114,7 +122,8 @@ public final class TopicsImage {
 
     public Map<TopicPartition, PartitionRegistration> partitions() {
         Map<TopicPartition, PartitionRegistration> partitions = new HashMap<>();
-        topicsById.values().forEach(topic -> {
+        topicsById.entrySet().forEach(entry -> {
+            TopicImage topic = entry.getValue();
             topic.partitions().forEach((key, value) -> partitions.put(new TopicPartition(topic.name(), key), value));
         });
         return partitions;

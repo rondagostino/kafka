@@ -124,6 +124,7 @@ versions += [
   spotbugs: "4.7.3",
   swaggerAnnotations: "2.2.0",
   swaggerJaxrs2: "2.2.0",
+  vavr: "0.10.4",
   zinc: "1.7.2",
   zookeeper: "3.6.4",
   zstd: "1.5.2-1"
@@ -215,6 +216,7 @@ libs += [
   zookeeper: "org.apache.zookeeper:zookeeper:$versions.zookeeper",
   jfreechart: "jfreechart:jfreechart:$versions.jfreechart",
   mavenArtifact: "org.apache.maven:maven-artifact:$versions.mavenArtifact",
+  vavr: "io.vavr:vavr:$versions.vavr",
   zstd: "com.github.luben:zstd-jni:$versions.zstd",
   httpclient: "org.apache.httpcomponents:httpclient:$versions.httpclient"
 ]

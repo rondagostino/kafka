@@ -74,18 +74,18 @@ public class TopicsImageTest {
         return new TopicImage(name, id, partitionMap);
     }
 
-    private static Map<Uuid, TopicImage> newTopicsByIdMap(Collection<TopicImage> topics) {
-        Map<Uuid, TopicImage> map = new HashMap<>();
+    private static io.vavr.collection.Map<Uuid, TopicImage> newTopicsByIdMap(Collection<TopicImage> topics) {
+        io.vavr.collection.Map<Uuid, TopicImage> map = io.vavr.collection.HashMap.empty();
         for (TopicImage topic : topics) {
-            map.put(topic.id(), topic);
+            map = map.put(topic.id(), topic);
         }
         return map;
     }
 
-    private static Map<String, TopicImage> newTopicsByNameMap(Collection<TopicImage> topics) {
-        Map<String, TopicImage> map = new HashMap<>();
+    private static io.vavr.collection.Map<String, TopicImage> newTopicsByNameMap(Collection<TopicImage> topics) {
+        io.vavr.collection.Map<String, TopicImage> map = io.vavr.collection.HashMap.empty();
         for (TopicImage topic : topics) {
-            map.put(topic.name(), topic);
+            map = map.put(topic.name(), topic);
         }
         return map;
     }

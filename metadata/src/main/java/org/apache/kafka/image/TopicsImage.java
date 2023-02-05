@@ -23,8 +23,8 @@ import org.apache.kafka.image.writer.ImageWriter;
 import org.apache.kafka.image.writer.ImageWriterOptions;
 import org.apache.kafka.metadata.PartitionRegistration;
 import org.apache.kafka.server.util.TranslatedValueMapView;
+import org.apache.kafka.server.util.VavrMapAsJava;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -38,15 +38,21 @@ import java.util.stream.Collectors;
  */
 public final class TopicsImage {
     public static final TopicsImage EMPTY =
-        new TopicsImage(Collections.emptyMap(), Collections.emptyMap());
+        new TopicsImage(io.vavr.collection.HashMap.empty(), io.vavr.collection.HashMap.empty());
 
-    private final Map<Uuid, TopicImage> topicsById;
-    private final Map<String, TopicImage> topicsByName;
+    final io.vavr.collection.Map<Uuid, TopicImage> topicsById;
+    final io.vavr.collection.Map<String, TopicImage> topicsByName;
 
-    public TopicsImage(Map<Uuid, TopicImage> topicsById,
-                       Map<String, TopicImage> topicsByName) {
-        this.topicsById = Collections.unmodifiableMap(topicsById);
-        this.topicsByName = Collections.unmodifiableMap(topicsByName);
+    public TopicsImage(io.vavr.collection.Map<Uuid, TopicImage> topicsById,
+                       io.vavr.collection.Map<String, TopicImage> topicsByName) {
+        this.topicsById = topicsById;
+        this.topicsByName = topicsByName;
+    }
+
+    public TopicsImage including(TopicImage topic) {
+        return new TopicsImage(
+            this.topicsById.put(topic.id(), topic),
+            this.topicsByName.put(topic.name(), topic));
     }
 
     public boolean isEmpty() {
@@ -54,25 +60,25 @@ public final class TopicsImage {
     }
 
     public Map<Uuid, TopicImage> topicsById() {
-        return topicsById;
+        return new VavrMapAsJava<>(topicsById);
     }
 
     public Map<String, TopicImage> topicsByName() {
-        return topicsByName;
+        return new VavrMapAsJava<>(topicsByName);
     }
 
     public PartitionRegistration getPartition(Uuid id, int partitionId) {
-        TopicImage topicImage = topicsById.get(id);
+        TopicImage topicImage = topicsById.get(id).getOrNull();
         if (topicImage == null) return null;
         return topicImage.partitions().get(partitionId);
     }
 
     public TopicImage getTopic(Uuid id) {
-        return topicsById.get(id);
+        return topicsById.get(id).getOrNull();
     }
 
     public TopicImage getTopic(String name) {
-        return topicsByName.get(name);
+        return topicsByName.get(name).getOrNull();
     }
 
     public void write(ImageWriter writer, ImageWriterOptions options) {
@@ -100,7 +106,7 @@ public final class TopicsImage {
      * Like TopicsImage itself, this map is immutable.
      */
     public Map<String, Uuid> topicNameToIdView() {
-        return new TranslatedValueMapView<>(topicsByName, image -> image.id());
+        return new TranslatedValueMapView<>(new VavrMapAsJava<>(topicsByName), image -> image.id());
     }
 
     /**
@@ -109,7 +115,7 @@ public final class TopicsImage {
      * Like TopicsImage itself, this map is immutable.
      */
     public Map<Uuid, String> topicIdToNameView() {
-        return new TranslatedValueMapView<>(topicsById, image -> image.name());
+        return new TranslatedValueMapView<>(new VavrMapAsJava<>(topicsById), image -> image.name());
     }
 
     public Map<TopicPartition, PartitionRegistration> partitions() {
@@ -122,10 +128,15 @@ public final class TopicsImage {
 
     @Override
     public String toString() {
-        return "TopicsImage(topicsById=" + topicsById.entrySet().stream().
-            map(e -> e.getKey() + ":" + e.getValue()).collect(Collectors.joining(", ")) +
-            ", topicsByName=" + topicsByName.entrySet().stream().
-            map(e -> e.getKey() + ":" + e.getValue()).collect(Collectors.joining(", ")) +
+        return "TopicsImage(topicsById=" + topicsById
+            .toStream()
+            .map(e -> e._1 + ":" + e._2)
+            .collect(Collectors.joining(", ")) +
+            ", topicsByName=" +
+            topicsByName
+            .toStream()
+            .map(e -> e._1 + ":" + e._2)
+            .collect(Collectors.joining(", ")) +
             ")";
     }
 }

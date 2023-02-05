@@ -263,6 +263,7 @@ swagger-core-2.2.0
 swagger-integration-2.2.0
 swagger-jaxrs2-2.2.0
 swagger-models-2.2.0
+vavr-0.10.4
 zookeeper-3.6.4
 zookeeper-jute-3.6.4
 
